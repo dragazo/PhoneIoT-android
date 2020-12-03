@@ -6,7 +6,6 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.os.Bundle;
-import android.os.StrictMode;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.TextView;
@@ -18,12 +17,11 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.util.Random;
 
 public class MainActivity extends AppCompatActivity implements SensorEventListener {
-
-    private static final String VALUE_FORMAT = "%.3f";
 
     private class SensorInfo {
         public Sensor sensor;
@@ -77,35 +75,27 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     private TextView sensorDisplay;
 
     private static final int SERVER_PORT = 1975;
-    private SocketAddress serverAddress = null;
-    private DatagramSocket serverSocket = null;
+    private static final int LOCAL_PORT = 8888;
+    private DatagramSocket socket = null; // our socket for udp comms - do not close or change it
+    private SocketAddress netsbloxAddress = null; // target for heartbeat comms - can be changed at will
     private byte[] macAddress = null;
 
     private Thread serverThread = null;
+    private long next_heartbeat = 0;
 
-    private byte[] getMacAddress() {
-        if (macAddress != null) return macAddress;
-
-        // as of Marshmallow and above, Android no longer allows access to the MAC address.
-        // but we just need a unique identifier, so we can just generate a random value for it instead.
-        Random r = new Random();
-        macAddress = new byte[6];
-        r.nextBytes(macAddress);
-
-        Toast.makeText(this, String.format("generated mac %s", macAddress.toString()), Toast.LENGTH_LONG).show();
-
-        return macAddress;
-    }
     private void connectToServer() {
-        disconnectFromServer();
-
-        EditText portText = findViewById(R.id.serverPortText);
-        int port = Integer.parseInt(portText.getText().toString());
-        try { serverSocket = new DatagramSocket(port); }
-        catch (Exception ex) { Toast.makeText(this, String.format("Failed to open port %d: %s", port, ex.toString()), Toast.LENGTH_SHORT).show(); }
+        if (socket == null) { // open the socket if it's not already
+            try {
+                socket = new DatagramSocket(LOCAL_PORT);
+            } catch (Exception ex) {
+                Toast.makeText(this, String.format("Failed to open port %d: %s", LOCAL_PORT, ex.toString()), Toast.LENGTH_SHORT).show();
+                return;
+            }
+        }
 
         EditText hostText = findViewById(R.id.serverHostText);
-        serverAddress = new InetSocketAddress(hostText.getText().toString(), SERVER_PORT);
+        netsbloxAddress = new InetSocketAddress(hostText.getText().toString(), SERVER_PORT);
+        next_heartbeat = 0; // trigger a heartbeat on the next network thread wakeup
 
         if (serverThread == null) {
             serverThread = new Thread(() -> {
@@ -113,44 +103,40 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 DatagramPacket packet = new DatagramPacket(buf, 0, buf.length);
                 while (true) {
                     try {
-                        if (serverSocket == null) {
-                            Thread.sleep(500);
-                            continue;
+                        long now_time = System.currentTimeMillis();
+                        if (now_time >= next_heartbeat) {
+                            netsbloxSend(new byte[] { 'I' }, netsbloxAddress); // send heartbeat so server knows we're still there
+                            next_heartbeat = now_time + 60 * 1000; // next heartbeat in 1 minute
                         }
-                        serverSocket.receive(packet);
+
+                        // wait for a message
+                        socket.setSoTimeout(1 * 1000);
+                        socket.receive(packet);
                         if (packet.getLength() == 0) continue;
 
                         if (buf[0] == 'A') {
                             float[] vals = accelerometer.data;
                             byte[] resp = ByteBuffer.allocate(13).put((byte)'A').putFloat(vals[0]).putFloat(vals[1]).putFloat(vals[2]).array();
-                            netsbloxSend(resp);
+                            netsbloxSend(resp, packet.getSocketAddress());
                         }
                     }
-                    catch (Exception ex) {}
+                    catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
+                    catch (Exception ex) {
+                        System.err.printf("network thread exception: %s", ex);
+                    }
                 }
             });
             serverThread.start();
         }
-
-        StrictMode.ThreadPolicy policy = new StrictMode.ThreadPolicy.Builder().permitAll().build();
-        StrictMode.setThreadPolicy(policy);
     }
-    private void disconnectFromServer() {
-        if (serverSocket != null) {
-            serverSocket.close();
-            serverSocket = null;
-        }
-    }
-    private void netsbloxSend(byte[] content) {
-        if (serverSocket != null && serverAddress != null) {
+    private void netsbloxSend(byte[] content, SocketAddress dest) throws Exception {
+        if (socket != null) {
             byte[] expanded = new byte[content.length + 10];
-            byte[] macAddr = getMacAddress();
-            for (int i = 0; i < 6; ++i) expanded[i] = macAddr[i];
+            for (int i = 0; i < 6; ++i) expanded[i] = macAddress[i];
             for (int i = 0; i < 4; ++i) expanded[6 + i] = 0; // we can set the time field to zero (pretty sure it isn't actually used by the server)
             for (int i = 0; i < content.length; ++i) expanded[10 + i] = content[i];
-            DatagramPacket packet = new DatagramPacket(expanded, expanded.length, serverAddress);
-            try { serverSocket.send(packet); }
-            catch (Exception ex) { Toast.makeText(this, String.format("failed to send packet: %s", ex.toString()), Toast.LENGTH_SHORT).show(); }
+            DatagramPacket packet = new DatagramPacket(expanded, expanded.length, dest);
+            socket.send(packet);
         }
     }
 
@@ -183,6 +169,18 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        // as of Marshmallow and above, Android no longer allows access to the MAC address.
+        // but we just need a unique identifier, so we can just generate a random value for it instead.
+        Random r = new Random();
+        macAddress = new byte[6];
+        r.nextBytes(macAddress);
+
+        TextView title = findViewById(R.id.titleText);
+        StringBuilder b = new StringBuilder(32);
+        b.append("SalIO - ");
+        appendBytes(b, macAddress);
+        title.setText(b.toString());
+
         grabSensors();
     }
 
@@ -190,13 +188,19 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         float s = 0;
         for (int i = 0; i < vec.length; ) {
             s += vec[i] * vec[i];
-            b.append(String.format(VALUE_FORMAT, vec[i]));
+            b.append(String.format("%.3f", vec[i]));
             if (++i < vec.length) b.append(", ");
         }
         b.append(" (");
-        b.append(String.format(VALUE_FORMAT, Math.sqrt(s)));
+        b.append(String.format("%.3f", Math.sqrt(s)));
         b.append(')');
     }
+    private static void appendBytes(StringBuilder b, byte[] bytes) {
+        for (byte v : bytes) {
+            b.append(String.format("%02x",v));
+        }
+    }
+
     private void updateSensorDisplay() {
         if (sensorDisplay == null || !sensorDisplay.isShown()) sensorDisplay = findViewById(R.id.sensorDisplay);
         if (sensorDisplay == null || !sensorDisplay.isShown()) return;
@@ -301,15 +305,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         sensorManager.unregisterListener(this);
     }
 
-    public void updateSensorsButtonPress(View view) {
-        Toast.makeText(this, "updating sensors", Toast.LENGTH_SHORT).show();
-        resubscribeListeners();
-    }
     public void serverConnectButtonPress(View view) {
         connectToServer();
-    }
-    public void serverDisconnectButtonPress(View view) {
-        //disconnectFromServer();
-        netsbloxSend(new byte[] { 'I' });
     }
 }
