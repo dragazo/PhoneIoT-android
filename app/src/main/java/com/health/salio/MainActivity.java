@@ -109,15 +109,22 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                             next_heartbeat = now_time + 60 * 1000; // next heartbeat in 1 minute
                         }
 
-                        // wait for a message
+                        // wait for a message - short duration is so we can see reconnections quickly
                         socket.setSoTimeout(1 * 1000);
                         socket.receive(packet);
                         if (packet.getLength() == 0) continue;
-
-                        if (buf[0] == 'A') {
-                            float[] vals = accelerometer.data;
-                            byte[] resp = ByteBuffer.allocate(13).put((byte)'A').putFloat(vals[0]).putFloat(vals[1]).putFloat(vals[2]).array();
-                            netsbloxSend(resp, packet.getSocketAddress());
+                        switch (buf[0]) {
+                            case 'A': {
+                                float[] vals = accelerometer.data;
+                                byte[] resp = ByteBuffer.allocate(13).put(buf[0]).putFloat(vals[0]).putFloat(vals[1]).putFloat(vals[2]).array();
+                                netsbloxSend(resp, packet.getSocketAddress());
+                                break;
+                            }
+                            case 'P': {
+                                byte[] resp = ByteBuffer.allocate(5).put(buf[0]).putFloat(proximity.data[0]).array();
+                                netsbloxSend(resp, packet.getSocketAddress());
+                                break;
+                            }
                         }
                     }
                     catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
@@ -140,6 +147,25 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         }
     }
 
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        // as of Marshmallow and above, Android no longer allows access to the MAC address.
+        // but we just need a unique identifier, so we can just generate a random value for it instead.
+        Random r = new Random();
+        macAddress = new byte[6];
+        r.nextBytes(macAddress);
+
+        TextView title = findViewById(R.id.titleText);
+        StringBuilder b = new StringBuilder(32);
+        b.append("SalIO - ");
+        appendBytes(b, macAddress);
+        title.setText(b.toString());
+
+        resubscribeListeners();
+    }
     private void grabSensors() {
         sensorManager = (SensorManager)getSystemService(Context.SENSOR_SERVICE);
 
@@ -163,25 +189,29 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         pressure = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE), 1);
         relativeHumidity = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY), 1);
     }
-
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
-
-        // as of Marshmallow and above, Android no longer allows access to the MAC address.
-        // but we just need a unique identifier, so we can just generate a random value for it instead.
-        Random r = new Random();
-        macAddress = new byte[6];
-        r.nextBytes(macAddress);
-
-        TextView title = findViewById(R.id.titleText);
-        StringBuilder b = new StringBuilder(32);
-        b.append("SalIO - ");
-        appendBytes(b, macAddress);
-        title.setText(b.toString());
-
+    void resubscribeListeners() {
+        if (sensorManager != null) sensorManager.unregisterListener(this);
         grabSensors();
+
+        // motion sensors
+        accelerometer.connect(this, sensorManager);
+        gravity.connect(this, sensorManager);
+        gyroscope.connect(this, sensorManager);
+        linearAcceleration.connect(this, sensorManager);
+        rotationVector.connect(this, sensorManager);
+        stepCounter.connect(this, sensorManager);
+
+        // position sensors
+        gameRotationVector.connect(this, sensorManager);
+        geomagneticRotationVector.connect(this, sensorManager);
+        magneticField.connect(this, sensorManager);
+        proximity.connect(this, sensorManager);
+
+        // environment sensors
+        ambientTemperature.connect(this, sensorManager);
+        light.connect(this, sensorManager);
+        pressure.connect(this, sensorManager);
+        relativeHumidity.connect(this, sensorManager);
     }
 
     private static void appendVector(StringBuilder b, float[] vec) {
@@ -243,7 +273,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
 
         sensorDisplay.setText(b.toString());
     }
-
     @Override
     public final void onSensorChanged(SensorEvent e) {
         // motion sensors
@@ -268,42 +297,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     }
     @Override
     public final void onAccuracyChanged(Sensor sensor, int accuracy) { }
-
-    void resubscribeListeners() {
-        sensorManager.unregisterListener(this);
-        grabSensors();
-
-        // motion sensors
-        accelerometer.connect(this, sensorManager);
-        gravity.connect(this, sensorManager);
-        gyroscope.connect(this, sensorManager);
-        linearAcceleration.connect(this, sensorManager);
-        rotationVector.connect(this, sensorManager);
-        stepCounter.connect(this, sensorManager);
-
-        // position sensors
-        gameRotationVector.connect(this, sensorManager);
-        geomagneticRotationVector.connect(this, sensorManager);
-        magneticField.connect(this, sensorManager);
-        proximity.connect(this, sensorManager);
-
-        // environment sensors
-        ambientTemperature.connect(this, sensorManager);
-        light.connect(this, sensorManager);
-        pressure.connect(this, sensorManager);
-        relativeHumidity.connect(this, sensorManager);
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        resubscribeListeners();
-    }
-    @Override
-    protected void onPause() {
-        super.onPause();
-        sensorManager.unregisterListener(this);
-    }
 
     public void serverConnectButtonPress(View view) {
         connectToServer();
