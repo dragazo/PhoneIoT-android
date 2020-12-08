@@ -1,11 +1,14 @@
 package com.health.salio;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.os.Bundle;
+import android.os.Handler;
+import android.preference.PreferenceManager;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.TextView;
@@ -21,9 +24,9 @@ import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.util.Random;
 
-public class MainActivity extends AppCompatActivity implements SensorEventListener {
+public class MainActivity extends AppCompatActivity {
 
-    private class SensorInfo {
+    private class SensorInfo implements SensorEventListener {
         public Sensor sensor;
         public float[] data;
         public boolean supported;
@@ -33,9 +36,9 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             data = new float[dims];
             supported = false;
         }
-        public void connect(SensorEventListener listener, SensorManager manager) {
+        public void connect(SensorManager manager) {
             if (sensor != null) {
-                supported = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL);
+                supported = manager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_NORMAL);
             }
         }
         public void updateData(float[] newData) {
@@ -48,6 +51,11 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             if (supported) appendVector(b, data);
             else b.append("Not Supported on this Device");
         }
+
+        @Override
+        public void onSensorChanged(SensorEvent event) { updateData(event.values); }
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {}
     }
 
     private SensorManager sensorManager;
@@ -73,11 +81,15 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     private SensorInfo relativeHumidity;
 
     private TextView sensorDisplay;
+    private static final int SENSOR_DISPLAY_UPDATE_FREQUENCY = 1000;
 
     private static final int SERVER_PORT = 1975;
     private static final int LOCAL_PORT = 8888;
     private DatagramSocket socket = null; // our socket for udp comms - do not close or change it
     private SocketAddress netsbloxAddress = null; // target for heartbeat comms - can be changed at will
+
+    private final String PREFERENCES_FILE_NAME = "SALIO_PREFS"; // name of the preferences file to save
+    private final String MAC_ADDR_PREF_NAME = "MAC_ADDR"; // name to use for mac addr in stored app preferences
     private byte[] macAddress = null;
 
     private Thread serverThread = null;
@@ -152,11 +164,26 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // as of Marshmallow and above, Android no longer allows access to the MAC address.
-        // but we just need a unique identifier, so we can just generate a random value for it instead.
-        Random r = new Random();
+        // --------------------------------------------------
+
         macAddress = new byte[6];
-        r.nextBytes(macAddress);
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+        long macInt = -1;
+        try { macInt = prefs.getLong(MAC_ADDR_PREF_NAME, -1); }
+        catch (Exception ignored) { Toast.makeText(this, ignored.toString(), Toast.LENGTH_LONG).show(); }
+        if (macInt < 0) {
+            Random r = new Random(); // generate a random fake mac addr (new versions of android no longer support getting the real one)
+            r.nextBytes(macAddress);
+
+            // cache the generated value in preferences (so multiple application starts have the same id)
+            macInt = 0;
+            for (byte b : macAddress) macInt = (macInt << 8) | ((long)b & 0xff); // convert array to int
+            prefs.edit().putLong(MAC_ADDR_PREF_NAME, macInt).commit();
+        }
+        else {
+            // convert int to array
+            for (int i = 5; i >= 0; --i, macInt >>= 8) macAddress[i] = (byte)macInt;
+        }
 
         TextView title = findViewById(R.id.titleText);
         StringBuilder b = new StringBuilder(32);
@@ -164,9 +191,8 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         appendBytes(b, macAddress);
         title.setText(b.toString());
 
-        resubscribeListeners();
-    }
-    private void grabSensors() {
+        // --------------------------------------------------
+
         sensorManager = (SensorManager)getSystemService(Context.SENSOR_SERVICE);
 
         // motion sensors
@@ -188,30 +214,40 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         light = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT), 1);
         pressure = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE), 1);
         relativeHumidity = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY), 1);
-    }
-    void resubscribeListeners() {
-        if (sensorManager != null) sensorManager.unregisterListener(this);
-        grabSensors();
+
+        // --------------------------------------------------
 
         // motion sensors
-        accelerometer.connect(this, sensorManager);
-        gravity.connect(this, sensorManager);
-        gyroscope.connect(this, sensorManager);
-        linearAcceleration.connect(this, sensorManager);
-        rotationVector.connect(this, sensorManager);
-        stepCounter.connect(this, sensorManager);
+        accelerometer.connect(sensorManager);
+        gravity.connect(sensorManager);
+        gyroscope.connect(sensorManager);
+        linearAcceleration.connect(sensorManager);
+        rotationVector.connect(sensorManager);
+        stepCounter.connect(sensorManager);
 
         // position sensors
-        gameRotationVector.connect(this, sensorManager);
-        geomagneticRotationVector.connect(this, sensorManager);
-        magneticField.connect(this, sensorManager);
-        proximity.connect(this, sensorManager);
+        gameRotationVector.connect(sensorManager);
+        geomagneticRotationVector.connect(sensorManager);
+        magneticField.connect(sensorManager);
+        proximity.connect(sensorManager);
 
         // environment sensors
-        ambientTemperature.connect(this, sensorManager);
-        light.connect(this, sensorManager);
-        pressure.connect(this, sensorManager);
-        relativeHumidity.connect(this, sensorManager);
+        ambientTemperature.connect(sensorManager);
+        light.connect(sensorManager);
+        pressure.connect(sensorManager);
+        relativeHumidity.connect(sensorManager);
+
+        // --------------------------------------------------
+
+        Handler handler = new Handler();
+        new Runnable() {
+            @Override
+            public void run() {
+                try { updateSensorDisplay(); } // try block just in case (should never throw)
+                catch (Exception ignored) {}
+                finally { handler.postDelayed(this, SENSOR_DISPLAY_UPDATE_FREQUENCY); }
+            }
+        }.run();
     }
 
     private static void appendVector(StringBuilder b, float[] vec) {
@@ -273,30 +309,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
 
         sensorDisplay.setText(b.toString());
     }
-    @Override
-    public final void onSensorChanged(SensorEvent e) {
-        // motion sensors
-        if (e.sensor == accelerometer.sensor) accelerometer.updateData(e.values);
-        else if (e.sensor == gravity.sensor) gravity.updateData(e.values);
-        else if (e.sensor == gyroscope.sensor) gyroscope.updateData(e.values);
-        else if (e.sensor == linearAcceleration.sensor) linearAcceleration.updateData(e.values);
-        else if (e.sensor == rotationVector.sensor) rotationVector.updateData(e.values);
-        else if (e.sensor == stepCounter.sensor) stepCounter.updateData(e.values);
-        // position sensors
-        else if (e.sensor == gameRotationVector.sensor) gameRotationVector.updateData(e.values);
-        else if (e.sensor == geomagneticRotationVector.sensor) geomagneticRotationVector.updateData(e.values);
-        else if (e.sensor == magneticField.sensor) magneticField.updateData(e.values);
-        else if (e.sensor == proximity.sensor) proximity.updateData(e.values);
-        // environment sensors
-        else if (e.sensor == ambientTemperature.sensor) ambientTemperature.updateData(e.values);
-        else if (e.sensor == light.sensor) light.updateData(e.values);
-        else if (e.sensor == pressure.sensor) pressure.updateData(e.values);
-        else if (e.sensor == relativeHumidity.sensor) relativeHumidity.updateData(e.values);
-
-        updateSensorDisplay();
-    }
-    @Override
-    public final void onAccuracyChanged(Sensor sensor, int accuracy) { }
 
     public void serverConnectButtonPress(View view) {
         connectToServer();
