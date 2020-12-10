@@ -6,6 +6,9 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.preference.PreferenceManager;
@@ -23,6 +26,7 @@ import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.util.Random;
+import java.util.function.Consumer;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -58,7 +62,7 @@ public class MainActivity extends AppCompatActivity {
         public void onAccuracyChanged(Sensor sensor, int accuracy) {}
     }
 
-    private SensorManager sensorManager;
+    // ----------------------------------------------
 
     // motion sensors
     private SensorInfo accelerometer;
@@ -80,6 +84,39 @@ public class MainActivity extends AppCompatActivity {
     private SensorInfo pressure;
     private SensorInfo relativeHumidity;
 
+    // ----------------------------------------------
+
+    private static final long LOCATION_UPDATE_FREQUENCY = 5 * 1000; // ms
+    private static final float LOCATION_UPDATE_DISTANCE = 10; // meters
+
+    private class LocationSensor implements LocationListener {
+        public float[] latlong = new float[2];
+        public boolean supported = false;
+
+        public void connect(LocationManager manager) {
+            supported = false;
+            try {
+                manager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0, 0, this);
+                supported = true;
+            }
+            catch (SecurityException ignore) { }
+            catch (Exception ignore) { }
+        }
+        public void appendData(StringBuilder b) {
+            if (supported) appendVector(b, latlong);
+            else b.append("Not Supported on this Device");
+        }
+
+        @Override
+        public void onLocationChanged(Location loc) {
+            latlong[0] = (float)loc.getLatitude();
+            latlong[1] = (float)loc.getLongitude();
+        }
+    }
+    private LocationSensor location;
+
+    // ----------------------------------------------
+
     private TextView sensorDisplay;
     private static final int SENSOR_DISPLAY_UPDATE_FREQUENCY = 1000;
 
@@ -94,6 +131,11 @@ public class MainActivity extends AppCompatActivity {
 
     private Thread serverThread = null;
     private long next_heartbeat = 0;
+
+    @FunctionalInterface
+    private interface VectorSender {
+        void send(float[] vec) throws Exception;
+    }
 
     private void connectToServer() {
         if (socket == null) { // open the socket if it's not already
@@ -125,18 +167,22 @@ public class MainActivity extends AppCompatActivity {
                         socket.setSoTimeout(1 * 1000);
                         socket.receive(packet);
                         if (packet.getLength() == 0) continue;
+                        VectorSender vectorSender = v -> {
+                            ByteBuffer b = ByteBuffer.allocate(1 + v.length * 4).put(buf[0]);
+                            for (float val : v) b.putFloat(val);
+                            netsbloxSend(b.array(), packet.getSocketAddress());
+                        };
                         switch (buf[0]) {
-                            case 'A': {
-                                float[] vals = accelerometer.data;
-                                byte[] resp = ByteBuffer.allocate(13).put(buf[0]).putFloat(vals[0]).putFloat(vals[1]).putFloat(vals[2]).array();
-                                netsbloxSend(resp, packet.getSocketAddress());
-                                break;
-                            }
-                            case 'P': {
-                                byte[] resp = ByteBuffer.allocate(5).put(buf[0]).putFloat(proximity.data[0]).array();
-                                netsbloxSend(resp, packet.getSocketAddress());
-                                break;
-                            }
+                            case 'A': vectorSender.send(accelerometer.data); break;
+                            case 'G': vectorSender.send(gravity.data); break;
+                            case 'L': vectorSender.send(linearAcceleration.data); break;
+                            case 'Y': vectorSender.send(gyroscope.data); break;
+                            case 'R': vectorSender.send(rotationVector.data); break;
+                            case 'r': vectorSender.send(gameRotationVector.data); break;
+                            case 'M': vectorSender.send(magneticField.data); break;
+                            case 'P': vectorSender.send(proximity.data); break;
+                            case 'S': vectorSender.send(stepCounter.data); break;
+                            case 'l': vectorSender.send(light.data); break;
                         }
                     }
                     catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
@@ -193,7 +239,7 @@ public class MainActivity extends AppCompatActivity {
 
         // --------------------------------------------------
 
-        sensorManager = (SensorManager)getSystemService(Context.SENSOR_SERVICE);
+        SensorManager sensorManager = (SensorManager)getSystemService(Context.SENSOR_SERVICE);
 
         // motion sensors
         accelerometer = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER), 3);
@@ -236,6 +282,12 @@ public class MainActivity extends AppCompatActivity {
         light.connect(sensorManager);
         pressure.connect(sensorManager);
         relativeHumidity.connect(sensorManager);
+
+        // --------------------------------------------------
+
+        LocationManager locationManager = (LocationManager)getSystemService(LOCATION_SERVICE);
+        location = new LocationSensor();
+        location.connect(locationManager);
 
         // --------------------------------------------------
 
@@ -306,6 +358,11 @@ public class MainActivity extends AppCompatActivity {
         if (pressure != null) pressure.appendData(b);
         b.append("\nRel. Humidity: ");
         if (relativeHumidity != null) relativeHumidity.appendData(b);
+
+        // ------------------------------------------------------------------
+
+        b.append("\nLocation: ");
+        if (location != null) location.appendData(b);
 
         sensorDisplay.setText(b.toString());
     }
