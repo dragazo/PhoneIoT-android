@@ -1,7 +1,9 @@
 package com.health.salio;
 
+import android.Manifest;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -11,13 +13,26 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.preference.PreferenceManager;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
+
+import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.LocationCallback;
+import com.google.android.gms.location.LocationRequest;
+import com.google.android.gms.location.LocationResult;
+import com.google.android.gms.location.LocationServices;
+import com.google.android.gms.location.LocationSettingsRequest;
+import com.google.android.gms.location.LocationSettingsResponse;
+import com.google.android.gms.location.SettingsClient;
+import com.google.android.gms.tasks.Task;
 
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -86,32 +101,69 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
-    private static final long LOCATION_UPDATE_FREQUENCY = 5 * 1000; // ms
-    private static final float LOCATION_UPDATE_DISTANCE = 10; // meters
-
     private class LocationSensor implements LocationListener {
-        public float[] latlong = new float[2];
+        public float[] data = new float[2];
+        public int updateCount = 0;
         public boolean supported = false;
 
-        public void connect(LocationManager manager) {
-            supported = false;
-            try {
-                manager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0, 0, this);
+        private FusedLocationProviderClient fusedLocationProviderClient;
+        private LocationRequest locationRequest;
+
+        private LocationSettingsRequest request;
+        private SettingsClient client;
+        private LocationCallback locationCallback;
+        private Task<LocationSettingsResponse> locationSettingsResponseTask;
+
+        public LocationSensor(Context context) {
+            fusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(context);
+            locationRequest = LocationRequest.create();
+            locationRequest.setInterval(4000); // we request an update every 4 seconds
+            locationRequest.setFastestInterval(1000); // we also accept updates from other sources, but at most once per second (could be very fast)
+            locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
+
+            request = new LocationSettingsRequest.Builder().addLocationRequest(locationRequest).build();
+            client = LocationServices.getSettingsClient(context);
+            locationCallback = new LocationCallback() {
+                @Override
+                public void onLocationResult(LocationResult locationResult) {
+                    if (locationResult != null) {
+                        Location loc = locationResult.getLastLocation();
+                        location.data[0] = (float)loc.getLatitude();
+                        location.data[1] = (float)loc.getLongitude();
+                        updateCount += 1;
+                    }
+                }
+            };
+            locationSettingsResponseTask = client.checkLocationSettings(request);
+            locationSettingsResponseTask.addOnSuccessListener(resp -> {
                 supported = true;
-            }
-            catch (SecurityException ignore) { }
-            catch (Exception ignore) { }
+            });
+        }
+        public void start() {
+            try { fusedLocationProviderClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper()); }
+            catch (SecurityException ignored) {}
+        }
+        public void stop() {
+            fusedLocationProviderClient.removeLocationUpdates(locationCallback);
         }
         public void appendData(StringBuilder b) {
-            if (supported) appendVector(b, latlong);
+            if (supported) {
+                appendVector(b, data);
+                b.append(String.format(" [%d]", updateCount));
+            }
             else b.append("Not Supported on this Device");
         }
 
         @Override
         public void onLocationChanged(Location loc) {
-            latlong[0] = (float)loc.getLatitude();
-            latlong[1] = (float)loc.getLongitude();
+            System.err.printf("updating to %s %s", loc.getLatitude(), loc.getLongitude());
+            data[0] = (float)loc.getLatitude();
+            data[1] = (float)loc.getLongitude();
         }
+        @Override
+        public void onProviderDisabled(@NonNull String provider) { } // if we don't override these, app crashes when location is turned off
+        @Override
+        public void onProviderEnabled(@NonNull String provider) { } // if we don't override these, app crashes when location is turned off
     }
     private LocationSensor location;
 
@@ -125,7 +177,6 @@ public class MainActivity extends AppCompatActivity {
     private DatagramSocket socket = null; // our socket for udp comms - do not close or change it
     private SocketAddress netsbloxAddress = null; // target for heartbeat comms - can be changed at will
 
-    private final String PREFERENCES_FILE_NAME = "SALIO_PREFS"; // name of the preferences file to save
     private final String MAC_ADDR_PREF_NAME = "MAC_ADDR"; // name to use for mac addr in stored app preferences
     private byte[] macAddress = null;
 
@@ -183,6 +234,7 @@ public class MainActivity extends AppCompatActivity {
                             case 'P': vectorSender.send(proximity.data); break;
                             case 'S': vectorSender.send(stepCounter.data); break;
                             case 'l': vectorSender.send(light.data); break;
+                            case 'X': vectorSender.send(location.data); break;
                         }
                     }
                     catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
@@ -285,9 +337,8 @@ public class MainActivity extends AppCompatActivity {
 
         // --------------------------------------------------
 
-        LocationManager locationManager = (LocationManager)getSystemService(LOCATION_SERVICE);
-        location = new LocationSensor();
-        location.connect(locationManager);
+        location = new LocationSensor(this);
+        location.start();
 
         // --------------------------------------------------
 
