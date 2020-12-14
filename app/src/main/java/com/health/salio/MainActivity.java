@@ -48,11 +48,14 @@ import com.google.android.gms.location.LocationSettingsResponse;
 import com.google.android.gms.location.SettingsClient;
 import com.google.android.gms.tasks.Task;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
@@ -213,7 +216,7 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
-    private Intent cameraIntent;
+    private Bitmap imgSnapshot;
 
     // ----------------------------------------------
 
@@ -221,14 +224,17 @@ public class MainActivity extends AppCompatActivity {
     private static final int SENSOR_DISPLAY_UPDATE_FREQUENCY = 1000;
 
     private static final int SERVER_PORT = 1975;
-    private static final int LOCAL_PORT = 8888;
-    private DatagramSocket socket = null; // our socket for udp comms - do not close or change it
+    private static final int UDP_PORT = 8888;
+    private static final int TCP_PORT = 8889;
     private SocketAddress netsbloxAddress = null; // target for heartbeat comms - can be changed at will
+    private DatagramSocket udpSocket = null; // our socket for udp comms - do not close or change it
+    private ServerSocket tcpSocket = null;   // our socket for tcp comms - do not close or change it
 
     private final String MAC_ADDR_PREF_NAME = "MAC_ADDR"; // name to use for mac addr in stored app preferences
     private byte[] macAddress = null;
 
-    private Thread serverThread = null;
+    private Thread udpServerThread = null;
+    private Thread tcpServerThread = null;
     private long next_heartbeat = 0;
 
     @FunctionalInterface
@@ -237,11 +243,17 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void connectToServer() {
-        if (socket == null) { // open the socket if it's not already
-            try {
-                socket = new DatagramSocket(LOCAL_PORT);
-            } catch (Exception ex) {
-                Toast.makeText(this, String.format("Failed to open port %d: %s", LOCAL_PORT, ex.toString()), Toast.LENGTH_SHORT).show();
+        if (udpSocket == null) {
+            try { udpSocket = new DatagramSocket(UDP_PORT); }
+            catch (Exception ex) {
+                Toast.makeText(this, String.format("Failed to open udp port %d: %s", UDP_PORT, ex.toString()), Toast.LENGTH_SHORT).show();
+                return;
+            }
+        }
+        if (tcpSocket == null) {
+            try { tcpSocket = new ServerSocket(TCP_PORT); }
+            catch (Exception ex) {
+                Toast.makeText(this, String.format("Failed to open tcp port %d: %s", UDP_PORT, ex.toString()), Toast.LENGTH_SHORT).show();
                 return;
             }
         }
@@ -250,9 +262,9 @@ public class MainActivity extends AppCompatActivity {
         netsbloxAddress = new InetSocketAddress(hostText.getText().toString(), SERVER_PORT);
         next_heartbeat = 0; // trigger a heartbeat on the next network thread wakeup
 
-        if (serverThread == null) {
-            serverThread = new Thread(() -> {
-                byte[] buf = new byte[1024];
+        if (udpServerThread == null) {
+            udpServerThread = new Thread(() -> {
+                byte[] buf = new byte[64];
                 DatagramPacket packet = new DatagramPacket(buf, 0, buf.length);
                 while (true) {
                     try {
@@ -263,14 +275,15 @@ public class MainActivity extends AppCompatActivity {
                         }
 
                         // wait for a message - short duration is so we can see reconnections quickly
-                        socket.setSoTimeout(1 * 1000);
-                        socket.receive(packet);
+                        udpSocket.setSoTimeout(1 * 1000);
+                        udpSocket.receive(packet);
                         if (packet.getLength() == 0) continue;
                         VectorSender vectorSender = v -> {
                             ByteBuffer b = ByteBuffer.allocate(1 + v.length * 4).put(buf[0]);
                             for (float val : v) b.putFloat(val);
                             netsbloxSend(b.array(), packet.getSocketAddress());
                         };
+                        System.err.println("network request");
                         switch (buf[0]) {
                             case 'A': vectorSender.send(accelerometer.data); break;
                             case 'G': vectorSender.send(gravity.data); break;
@@ -287,21 +300,43 @@ public class MainActivity extends AppCompatActivity {
                     }
                     catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
                     catch (Exception ex) {
-                        System.err.printf("network thread exception: %s", ex);
+                        System.err.printf("udp network thread exception: %s", ex);
                     }
                 }
             });
-            serverThread.start();
+            udpServerThread.start();
+        }
+        if (tcpServerThread == null) {
+            tcpServerThread = new Thread(() -> {
+                byte[] buf = new byte[64];
+                while (true) {
+                    try {
+                        try (Socket client = tcpSocket.accept()) {
+                            int buflen = client.getInputStream().read(buf);
+                            if (buflen == 1 && buf[0] == 'D') {
+                                System.err.println("requested image");
+                                imgSnapshot.compress(Bitmap.CompressFormat.JPEG, 90, client.getOutputStream());
+                                System.err.println("image sent");
+                            }
+                        }
+                    }
+                    catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
+                    catch (Exception ex) {
+                        System.err.printf("tcp network thread exception: %s", ex);
+                    }
+                }
+            });
+            tcpServerThread.start();
         }
     }
     private void netsbloxSend(byte[] content, SocketAddress dest) throws Exception {
-        if (socket != null) {
+        if (udpSocket != null) {
             byte[] expanded = new byte[content.length + 10];
             for (int i = 0; i < 6; ++i) expanded[i] = macAddress[i];
             for (int i = 0; i < 4; ++i) expanded[6 + i] = 0; // we can set the time field to zero (pretty sure it isn't actually used by the server)
             for (int i = 0; i < content.length; ++i) expanded[10 + i] = content[i];
             DatagramPacket packet = new DatagramPacket(expanded, expanded.length, dest);
-            socket.send(packet);
+            udpSocket.send(packet);
         }
     }
 
@@ -390,18 +425,18 @@ public class MainActivity extends AppCompatActivity {
 
         // --------------------------------------------------
 
+        // generate a default image for the networking interface and display (if enabled)
         ImageView imgDisplay = (ImageView)findViewById(R.id.snapshotDisplay);
-        if (getApplicationContext().getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
-            Bitmap defaultImg = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888);
-            Canvas canvas = new Canvas(defaultImg);
-            Paint paint = new Paint();
-            paint.setColor(Color.BLACK);
-            canvas.drawRect(0, 0, defaultImg.getWidth(), defaultImg.getHeight(), paint);
-            imgDisplay.setImageBitmap(defaultImg);
-        }
-        else {
-            imgDisplay.setVisibility(View.INVISIBLE);
-        }
+        Bitmap defaultImg = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(defaultImg);
+        Paint paint = new Paint();
+        paint.setColor(Color.BLACK);
+        canvas.drawRect(0, 0, defaultImg.getWidth(), defaultImg.getHeight(), paint);
+        imgSnapshot = defaultImg;
+
+        // if we have a camera, set the snapshot as its display content, otherwise hide it entirely (useless on this device)
+        if (getApplicationContext().getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) imgDisplay.setImageBitmap(imgSnapshot);
+        else imgDisplay.setVisibility(View.INVISIBLE);
 
         // --------------------------------------------------
 
@@ -510,7 +545,6 @@ public class MainActivity extends AppCompatActivity {
             case ExifInterface.ORIENTATION_ROTATE_270: return rotateImage(raw, 270);
             default: return raw;
         }
-        //return raw;
     }
 
     @Override
@@ -519,12 +553,10 @@ public class MainActivity extends AppCompatActivity {
         if (resultCode != Activity.RESULT_OK) return;
         switch (requestCode) {
             case CAMERA_REQUEST_CODE: {
-                //Bitmap img = (Bitmap)data.getExtras().get("data");
-                //File fileUri = (File)data.getExtras().get(MediaStore.EXTRA_OUTPUT);
                 try {
-                    Bitmap img = grabResultImage();
+                    imgSnapshot = grabResultImage();
                     ImageView view = (ImageView)findViewById(R.id.snapshotDisplay);
-                    view.setImageBitmap(img);
+                    view.setImageBitmap(imgSnapshot);
                 }
                 catch (Exception ex) {
                     Toast.makeText(this, String.format("failed to load image: %s", ex), Toast.LENGTH_LONG).show();
@@ -539,9 +571,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void cameraButtonClick(View view) {
-//        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-//        startActivityForResult(intent, CAMERA_REQUEST_CODE);
-
         Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
         if (intent.resolveActivity(getPackageManager()) != null) {
             try {
