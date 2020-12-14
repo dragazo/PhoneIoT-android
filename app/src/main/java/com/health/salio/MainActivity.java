@@ -1,9 +1,16 @@
 package com.health.salio;
 
 import android.Manifest;
+import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Matrix;
+import android.graphics.Paint;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -11,18 +18,25 @@ import android.hardware.SensorManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.media.ExifInterface;
+import android.net.Uri;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.preference.PreferenceManager;
+import android.provider.MediaStore;
 import android.view.View;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
@@ -34,16 +48,46 @@ import com.google.android.gms.location.LocationSettingsResponse;
 import com.google.android.gms.location.SettingsClient;
 import com.google.android.gms.tasks.Task;
 
+import java.io.File;
+import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Random;
 import java.util.function.Consumer;
 
 public class MainActivity extends AppCompatActivity {
+
+    private static class PermissionRequest {
+        public String permission;
+        public String reason;
+        public int requestCode;
+
+        public PermissionRequest(String p, String r, int c) {
+            permission = p;
+            reason = r;
+            requestCode = c;
+        }
+    }
+    private static final PermissionRequest[] REQUESTED_PERMISSIONS = new PermissionRequest[] {
+            new PermissionRequest(Manifest.permission.BODY_SENSORS, "reason", 0x6701),
+            new PermissionRequest(Manifest.permission.ACTIVITY_RECOGNITION, "reason", 0x6702),
+            new PermissionRequest(Manifest.permission.INTERNET, "reason", 0x6703),
+            new PermissionRequest(Manifest.permission.ACCESS_WIFI_STATE, "reason", 0x6704),
+            new PermissionRequest(Manifest.permission.ACCESS_COARSE_LOCATION, "reason", 0x6705),
+            new PermissionRequest(Manifest.permission.ACCESS_FINE_LOCATION, "reason", 0x6706),
+    };
+
+    // ------------------------------------
+
+    private static final int CAMERA_REQUEST_CODE = 0x9901;
+
+    // ------------------------------------
 
     private class SensorInfo implements SensorEventListener {
         public Sensor sensor;
@@ -166,6 +210,10 @@ public class MainActivity extends AppCompatActivity {
         public void onProviderEnabled(@NonNull String provider) { } // if we don't override these, app crashes when location is turned off
     }
     private LocationSensor location;
+
+    // ----------------------------------------------
+
+    private Intent cameraIntent;
 
     // ----------------------------------------------
 
@@ -342,6 +390,21 @@ public class MainActivity extends AppCompatActivity {
 
         // --------------------------------------------------
 
+        ImageView imgDisplay = (ImageView)findViewById(R.id.snapshotDisplay);
+        if (getApplicationContext().getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+            Bitmap defaultImg = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(defaultImg);
+            Paint paint = new Paint();
+            paint.setColor(Color.BLACK);
+            canvas.drawRect(0, 0, defaultImg.getWidth(), defaultImg.getHeight(), paint);
+            imgDisplay.setImageBitmap(defaultImg);
+        }
+        else {
+            imgDisplay.setVisibility(View.INVISIBLE);
+        }
+
+        // --------------------------------------------------
+
         Handler handler = new Handler();
         new Runnable() {
             @Override
@@ -418,7 +481,80 @@ public class MainActivity extends AppCompatActivity {
         sensorDisplay.setText(b.toString());
     }
 
+    private File createTempImageFile(String extension) throws IOException {
+        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+        return File.createTempFile("IMAGE_" + timeStamp + "_", extension, storageDir);
+    }
+
+    private Bitmap rotateImage(Bitmap raw, float degrees) {
+        Matrix matrix = new Matrix();
+        matrix.postRotate(degrees);
+        Bitmap res = Bitmap.createBitmap(raw, 0, 0, raw.getWidth(), raw.getHeight(), matrix, true);
+        raw.recycle();
+        return res;
+    }
+    private Uri imageActivityUri = null;
+    private String imageActivityCorrectedPath = null;
+    private Bitmap grabResultImage() throws Exception {
+        System.err.println("here 1");
+        ExifInterface exif = new ExifInterface(imageActivityCorrectedPath);
+        System.err.println("here 2");
+        int orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+        System.err.println("here 3");
+        Bitmap raw = MediaStore.Images.Media.getBitmap(this.getContentResolver(), imageActivityUri);
+        System.err.println("here 4");
+        switch (orientation) {
+            case ExifInterface.ORIENTATION_ROTATE_90: return rotateImage(raw, 90);
+            case ExifInterface.ORIENTATION_ROTATE_180: return rotateImage(raw, 180);
+            case ExifInterface.ORIENTATION_ROTATE_270: return rotateImage(raw, 270);
+            default: return raw;
+        }
+        //return raw;
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != Activity.RESULT_OK) return;
+        switch (requestCode) {
+            case CAMERA_REQUEST_CODE: {
+                //Bitmap img = (Bitmap)data.getExtras().get("data");
+                //File fileUri = (File)data.getExtras().get(MediaStore.EXTRA_OUTPUT);
+                try {
+                    Bitmap img = grabResultImage();
+                    ImageView view = (ImageView)findViewById(R.id.snapshotDisplay);
+                    view.setImageBitmap(img);
+                }
+                catch (Exception ex) {
+                    Toast.makeText(this, String.format("failed to load image: %s", ex), Toast.LENGTH_LONG).show();
+                }
+                break;
+            }
+        }
+    }
+
     public void serverConnectButtonPress(View view) {
         connectToServer();
+    }
+
+    public void cameraButtonClick(View view) {
+//        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+//        startActivityForResult(intent, CAMERA_REQUEST_CODE);
+
+        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        if (intent.resolveActivity(getPackageManager()) != null) {
+            try {
+                File file = createTempImageFile(".jpg");
+                Uri fileUri = FileProvider.getUriForFile(this, "com.example.android.fileprovider", file);
+                intent.putExtra(MediaStore.EXTRA_OUTPUT, fileUri);
+                imageActivityUri = fileUri;
+                imageActivityCorrectedPath = file.getAbsolutePath();
+                startActivityForResult(intent, CAMERA_REQUEST_CODE);
+            }
+            catch (Exception ex) {
+                Toast.makeText(this, String.format("Failed to take picture: %s", ex), Toast.LENGTH_LONG).show();
+            }
+        }
     }
 }
