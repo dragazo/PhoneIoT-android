@@ -2,6 +2,7 @@ package com.health.salio;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -20,12 +21,14 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.media.ExifInterface;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.preference.PreferenceManager;
 import android.provider.MediaStore;
+import android.text.TextUtils;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -60,7 +63,9 @@ import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Random;
 import java.util.function.Consumer;
 
@@ -68,26 +73,30 @@ public class MainActivity extends AppCompatActivity {
 
     private static class PermissionRequest {
         public String permission;
-        public String reason;
-        public int requestCode;
+        public String name;
 
-        public PermissionRequest(String p, String r, int c) {
+        public PermissionRequest(String p, String n) {
             permission = p;
-            reason = r;
-            requestCode = c;
+            name = n;
         }
     }
     private static final PermissionRequest[] REQUESTED_PERMISSIONS = new PermissionRequest[] {
-            new PermissionRequest(Manifest.permission.BODY_SENSORS, "reason", 0x6701),
-            new PermissionRequest(Manifest.permission.ACTIVITY_RECOGNITION, "reason", 0x6702),
-            new PermissionRequest(Manifest.permission.INTERNET, "reason", 0x6703),
-            new PermissionRequest(Manifest.permission.ACCESS_WIFI_STATE, "reason", 0x6704),
-            new PermissionRequest(Manifest.permission.ACCESS_COARSE_LOCATION, "reason", 0x6705),
-            new PermissionRequest(Manifest.permission.ACCESS_FINE_LOCATION, "reason", 0x6706),
+            new PermissionRequest(Manifest.permission.BODY_SENSORS, "Body Sensors"),
+            new PermissionRequest(Manifest.permission.ACTIVITY_RECOGNITION, "Activity Recognition"),
+            new PermissionRequest(Manifest.permission.INTERNET, "Internet"),
+            new PermissionRequest(Manifest.permission.ACCESS_WIFI_STATE, "WIFI State"),
+            new PermissionRequest(Manifest.permission.ACCESS_COARSE_LOCATION, "Coarse Location"),
+            new PermissionRequest(Manifest.permission.ACCESS_FINE_LOCATION, "Fine Location"),
+            new PermissionRequest(Manifest.permission.CAMERA, "Camera"),
+            new PermissionRequest(Manifest.permission.READ_EXTERNAL_STORAGE, "Read External Storage"),
+            new PermissionRequest(Manifest.permission.WRITE_EXTERNAL_STORAGE, "Write External Storage"),
     };
+
+    private static final String NOT_SUPPORTED_STRING = "Not Supported or Disabled";
 
     // ------------------------------------
 
+    private static final int PERMISSIONS_REQUEST_CODE = 0x2301;
     private static final int CAMERA_REQUEST_CODE = 0x9901;
 
     // ------------------------------------
@@ -115,7 +124,7 @@ public class MainActivity extends AppCompatActivity {
         }
         public void appendData(StringBuilder b) {
             if (supported) appendVector(b, data);
-            else b.append("Not Supported on this Device");
+            else b.append(NOT_SUPPORTED_STRING);
         }
 
         @Override
@@ -183,7 +192,9 @@ public class MainActivity extends AppCompatActivity {
             };
             locationSettingsResponseTask = client.checkLocationSettings(request);
             locationSettingsResponseTask.addOnSuccessListener(resp -> {
-                supported = true;
+                boolean coarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+                boolean fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+                supported = coarse || fine;
             });
         }
         public void start() {
@@ -198,7 +209,7 @@ public class MainActivity extends AppCompatActivity {
                 appendVector(b, data);
                 b.append(String.format(" [%d]", updateCount));
             }
-            else b.append("Not Supported on this Device");
+            else b.append(NOT_SUPPORTED_STRING);
         }
 
         @Override
@@ -341,12 +352,42 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == PERMISSIONS_REQUEST_CODE) finishInitialization();
+    }
+
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
         // --------------------------------------------------
 
+        List<String> failedPermissions = new ArrayList<>();
+        for (PermissionRequest r : REQUESTED_PERMISSIONS) {
+            if (ContextCompat.checkSelfPermission(this, r.permission) != PackageManager.PERMISSION_GRANTED) {
+                failedPermissions.add(r.permission);
+            }
+        }
+        if (!failedPermissions.isEmpty()) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                String[] p = new String[failedPermissions.size()];
+                for (int i = 0; i < p.length; ++i) p[i] = failedPermissions.get(i);
+                requestPermissions(p, PERMISSIONS_REQUEST_CODE);
+                return; // return so we don't complete initialization until after the permissions request has completed
+            } else {
+                AlertDialog.Builder builder = new AlertDialog.Builder(this);
+                builder.setTitle("Missing Permissions");
+                builder.setMessage("Without full permissions, some features of the app may not function.");
+                builder.show();
+            }
+        }
+
+        finishInitialization();
+    }
+
+    private void finishInitialization() {
         macAddress = new byte[6];
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
         long macInt = -1;
@@ -434,8 +475,12 @@ public class MainActivity extends AppCompatActivity {
         canvas.drawRect(0, 0, defaultImg.getWidth(), defaultImg.getHeight(), paint);
         imgSnapshot = defaultImg;
 
-        // if we have a camera, set the snapshot as its display content, otherwise hide it entirely (useless on this device)
-        if (getApplicationContext().getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) imgDisplay.setImageBitmap(imgSnapshot);
+        // if we have a camera (and permissions), set the snapshot as its display content, otherwise hide it entirely (useless on this device)
+        if (getApplicationContext().getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+            && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+        {
+            imgDisplay.setImageBitmap(imgSnapshot);
+        }
         else imgDisplay.setVisibility(View.INVISIBLE);
 
         // --------------------------------------------------
