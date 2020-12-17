@@ -101,7 +101,15 @@ public class MainActivity extends AppCompatActivity {
 
     // ------------------------------------
 
-    private class SensorInfo implements SensorEventListener {
+    private interface BasicSensor {
+        boolean isSupported();
+        float[] getData();
+        void calculate();
+    }
+
+    // ------------------------------------
+
+    private class SensorInfo implements SensorEventListener, BasicSensor {
         public Sensor sensor;
         public float[] data;
         public boolean supported;
@@ -122,15 +130,18 @@ public class MainActivity extends AppCompatActivity {
             for (int i = 0; i < m; ++i) data[i] = newData[i];
             for (int i = m; i < data.length; ++i) data[i] = 0;
         }
-        public void appendData(StringBuilder b) {
-            if (supported) appendVector(b, data);
-            else b.append(NOT_SUPPORTED_STRING);
-        }
 
         @Override
         public void onSensorChanged(SensorEvent event) { updateData(event.values); }
         @Override
         public void onAccuracyChanged(Sensor sensor, int accuracy) {}
+
+        @Override
+        public boolean isSupported() { return supported; }
+        @Override
+        public float[] getData() { return data; }
+        @Override
+        public void calculate() { }
     }
 
     // ----------------------------------------------
@@ -157,7 +168,38 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
-    private class LocationSensor implements LocationListener {
+    // the hardware orientation sensor has been deprecated for a while, so we simulate it with the accelerometer and magnetometer
+    private class OrientationCalculator implements BasicSensor {
+        public float[] data = new float[3];
+        public boolean supported = false;
+
+        private float[] matrixBuffer = new float[9];
+
+        private SensorInfo accel;
+        private SensorInfo magnet;
+
+        public OrientationCalculator(SensorInfo accelerometerSource, SensorInfo magnetometerSource) {
+            accel = accelerometerSource;
+            magnet = magnetometerSource;
+            supported = accel.supported && magnet.supported;
+        }
+
+        @Override
+        public boolean isSupported() { return supported; }
+        @Override
+        public float[] getData() { return data; }
+        @Override
+        public void calculate() {
+            SensorManager.getRotationMatrix(matrixBuffer, null, accel.data, magnet.data);
+            SensorManager.getOrientation(matrixBuffer, data);
+        }
+    }
+
+    OrientationCalculator orientationCalculator;
+
+    // ----------------------------------------------
+
+    private class LocationSensor implements LocationListener, BasicSensor {
         public float[] data = new float[2];
         public int updateCount = 0;
         public boolean supported = false;
@@ -222,6 +264,13 @@ public class MainActivity extends AppCompatActivity {
         public void onProviderDisabled(@NonNull String provider) { } // if we don't override these, app crashes when location is turned off
         @Override
         public void onProviderEnabled(@NonNull String provider) { } // if we don't override these, app crashes when location is turned off
+
+        @Override
+        public boolean isSupported() { return supported; }
+        @Override
+        public float[] getData() { return data; }
+        @Override
+        public void calculate() { }
     }
     private LocationSensor location;
 
@@ -231,7 +280,6 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
-    private TextView sensorDisplay;
     private static final int SENSOR_DISPLAY_UPDATE_FREQUENCY = 1000;
 
     private static final int SERVER_PORT = 1975;
@@ -289,25 +337,30 @@ public class MainActivity extends AppCompatActivity {
                         udpSocket.setSoTimeout(1 * 1000);
                         udpSocket.receive(packet);
                         if (packet.getLength() == 0) continue;
-                        VectorSender vectorSender = v -> {
+                        BasicSensor src;
+                        switch (buf[0]) {
+                            case 'A': src = accelerometer; break;
+                            case 'G': src = gravity; break;
+                            case 'L': src = linearAcceleration; break;
+                            case 'Y': src = gyroscope; break;
+                            case 'R': src = rotationVector; break;
+                            case 'r': src = gameRotationVector; break;
+                            case 'M': src = magneticField; break;
+                            case 'P': src = proximity; break;
+                            case 'S': src = stepCounter; break;
+                            case 'l': src = light; break;
+                            case 'X': src = location; break;
+                            case 'O': src = orientationCalculator; break;
+                            default: continue;
+                        }
+                        if (src.isSupported()) { // if the sensor is supported, send back all the content
+                            src.calculate(); // compute software-emulated logic (if any)
+                            float[] v = src.getData();
                             ByteBuffer b = ByteBuffer.allocate(1 + v.length * 4).put(buf[0]);
                             for (float val : v) b.putFloat(val);
                             netsbloxSend(b.array(), packet.getSocketAddress());
-                        };
-                        System.err.println("network request");
-                        switch (buf[0]) {
-                            case 'A': vectorSender.send(accelerometer.data); break;
-                            case 'G': vectorSender.send(gravity.data); break;
-                            case 'L': vectorSender.send(linearAcceleration.data); break;
-                            case 'Y': vectorSender.send(gyroscope.data); break;
-                            case 'R': vectorSender.send(rotationVector.data); break;
-                            case 'r': vectorSender.send(gameRotationVector.data); break;
-                            case 'M': vectorSender.send(magneticField.data); break;
-                            case 'P': vectorSender.send(proximity.data); break;
-                            case 'S': vectorSender.send(stepCounter.data); break;
-                            case 'l': vectorSender.send(light.data); break;
-                            case 'X': vectorSender.send(location.data); break;
                         }
+                        else netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress()); // otherwise send back the acknowledgement, but no data
                     }
                     catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
                     catch (Exception ex) {
@@ -325,9 +378,7 @@ public class MainActivity extends AppCompatActivity {
                         try (Socket client = tcpSocket.accept()) {
                             int buflen = client.getInputStream().read(buf);
                             if (buflen == 1 && buf[0] == 'D') {
-                                System.err.println("requested image");
-                                imgSnapshot.compress(Bitmap.CompressFormat.JPEG, 90, client.getOutputStream());
-                                System.err.println("image sent");
+                                imgSnapshot.compress(Bitmap.CompressFormat.JPEG, 90, client.getOutputStream()); // netsblox has a max resolution anyway, so no need for 100% quality compression
                             }
                         }
                     }
@@ -461,6 +512,10 @@ public class MainActivity extends AppCompatActivity {
 
         // --------------------------------------------------
 
+        orientationCalculator = new OrientationCalculator(accelerometer, magneticField);
+
+        // --------------------------------------------------
+
         location = new LocationSensor(this);
         location.start();
 
@@ -468,7 +523,7 @@ public class MainActivity extends AppCompatActivity {
 
         // generate a default image for the networking interface and display (if enabled)
         ImageView imgDisplay = (ImageView)findViewById(R.id.snapshotDisplay);
-        Bitmap defaultImg = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888);
+        Bitmap defaultImg = Bitmap.createBitmap(50, 50, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(defaultImg);
         Paint paint = new Paint();
         paint.setColor(Color.BLACK);
@@ -514,49 +569,40 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updateSensorDisplay() {
-        if (sensorDisplay == null || !sensorDisplay.isShown()) sensorDisplay = findViewById(R.id.sensorDisplay);
-        if (sensorDisplay == null || !sensorDisplay.isShown()) return;
-
+        TextView sensorDisplay = (TextView)findViewById(R.id.sensorDisplay);
+        if (!sensorDisplay.isShown()) return;
         StringBuilder b = new StringBuilder();
 
         // motion sensors
-        b.append("Accelerometer: ");
-        if (accelerometer != null) accelerometer.appendData(b);
-        b.append("\nGravity: ");
-        if (gravity != null) gravity.appendData(b);
-        b.append("\nGyroscope: ");
-        if (gyroscope != null) gyroscope.appendData(b);
-        b.append("\nLinear Accel: ");
-        if (linearAcceleration != null) linearAcceleration.appendData(b);
-        b.append("\nRot. Vector: ");
-        if (rotationVector != null) rotationVector.appendData(b);
-        b.append("\nStep Count: ");
-        if (stepCounter != null) stepCounter.appendData(b);
+        if (accelerometer.supported) { b.append("Accelerometer: "); appendVector(b, accelerometer.data); b.append('\n'); }
+        if (gravity.supported) { b.append("Gravity: "); appendVector(b, gravity.data); b.append('\n'); }
+        if (gyroscope.supported) { b.append("Gyroscope: "); appendVector(b, gyroscope.data); b.append('\n'); }
+        if (linearAcceleration.supported) { b.append("Linear Accel.: "); appendVector(b, linearAcceleration.data); b.append('\n'); }
+        if (rotationVector.supported) { b.append("Rot. Vector: "); appendVector(b, rotationVector.data); b.append('\n'); }
+        if (stepCounter.supported) { b.append("Step Count: "); appendVector(b, stepCounter.data); b.append('\n'); }
 
         // position sensors
-        b.append("\nGame Rot.: ");
-        if (gameRotationVector != null) gameRotationVector.appendData(b);
-        b.append("\nGeomag. Rot.: ");
-        if (geomagneticRotationVector != null) geomagneticRotationVector.appendData(b);
-        b.append("\nMag. Field: ");
-        if (magneticField != null) magneticField.appendData(b);
-        b.append("\nProximity: ");
-        if (proximity != null) proximity.appendData(b);
+        if (gameRotationVector.supported) { b.append("Game Rot.: "); appendVector(b, gameRotationVector.data); b.append('\n'); }
+        if (geomagneticRotationVector.supported) { b.append("Geomag. Rot.: "); appendVector(b, geomagneticRotationVector.data); b.append('\n'); }
+        if (magneticField.supported) { b.append("Mag. Field: "); appendVector(b, magneticField.data); b.append('\n'); }
+        if (proximity.supported) { b.append("Proximity: "); appendVector(b, proximity.data); b.append('\n'); }
 
         // environment sensors
-        b.append("\nAmbient Temp.: ");
-        if (ambientTemperature != null) ambientTemperature.appendData(b);
-        b.append("\nLight Level: ");
-        if (light != null) light.appendData(b);
-        b.append("\nPressure: ");
-        if (pressure != null) pressure.appendData(b);
-        b.append("\nRel. Humidity: ");
-        if (relativeHumidity != null) relativeHumidity.appendData(b);
+        if (ambientTemperature.supported) { b.append("Ambient Temp.: "); appendVector(b, ambientTemperature.data); b.append('\n'); }
+        if (light.supported) { b.append("Light Level: "); appendVector(b, light.data); b.append('\n'); }
+        if (pressure.supported) { b.append("Pressure: "); appendVector(b, pressure.data); b.append('\n'); }
+        if (relativeHumidity.supported) { b.append("Rel. Humidity: "); appendVector(b, relativeHumidity.data); b.append('\n'); }
 
-        // ------------------------------------------------------------------
+        // misc sensors
+        if (location.supported) { b.append("Location: "); appendVector(b, location.data); b.append('\n'); }
 
-        b.append("\nLocation: ");
-        if (location != null) location.appendData(b);
+        // orientation calculator (logical)
+        if (orientationCalculator.supported) {
+            orientationCalculator.calculate();
+            b.append("Orientation: ");
+            appendVector(b, orientationCalculator.data);
+            b.append('\n');
+        }
 
         sensorDisplay.setText(b.toString());
     }
