@@ -280,6 +280,39 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
+    private static final long PASSWORD_EXPIRY_INTERVAL = 1 * 1000 * 60 * 60 * 24; // expire after one day
+
+    private long _rawPassword = 0;
+    private long _passwordExpiry = 0;
+
+    public long getPassword() {
+        long nowtime = System.currentTimeMillis();
+        if (nowtime < _passwordExpiry) return _rawPassword;
+        _rawPassword = rand.nextLong() & Long.MAX_VALUE; // password is a 63-bit (positive) value
+        _passwordExpiry = nowtime + PASSWORD_EXPIRY_INTERVAL;
+
+        TextView text = (TextView)findViewById(R.id.authText);
+        text.setText(String.format("password: %016x", _rawPassword));
+
+        return _rawPassword;
+    }
+    public long getNewPassword() {
+        _passwordExpiry = 0;
+        return getPassword();
+    }
+
+    // ----------------------------------------------
+
+    private static long fromBEBytes(byte[] v, int start, int length) {
+        long res = 0;
+        for (int i = 0; i < length; ++i) res = (res << 8) | ((long)v[start + i] & 0xff);
+        return res;
+    }
+
+    // ----------------------------------------------
+
+    private Random rand = new Random();
+
     private static final int SENSOR_DISPLAY_UPDATE_FREQUENCY = 1000;
 
     private static final int SERVER_PORT = 1975;
@@ -295,11 +328,6 @@ public class MainActivity extends AppCompatActivity {
     private Thread udpServerThread = null;
     private Thread tcpServerThread = null;
     private long next_heartbeat = 0;
-
-    @FunctionalInterface
-    private interface VectorSender {
-        void send(float[] vec) throws Exception;
-    }
 
     private void connectToServer() {
         if (udpSocket == null) {
@@ -336,7 +364,13 @@ public class MainActivity extends AppCompatActivity {
                         // wait for a message - short duration is so we can see reconnections quickly
                         udpSocket.setSoTimeout(1 * 1000);
                         udpSocket.receive(packet);
-                        if (packet.getLength() == 0) continue;
+
+                        // ignore anything that's invalid or fails to auth
+                        if (packet.getLength() != 9 || fromBEBytes(buf, 1, 8) != getPassword()) {
+                            continue;
+                        }
+
+                        // otherwise do the actual request
                         BasicSensor src;
                         switch (buf[0]) {
                             case 'A': src = accelerometer; break;
@@ -351,7 +385,7 @@ public class MainActivity extends AppCompatActivity {
                             case 'l': src = light; break;
                             case 'X': src = location; break;
                             case 'O': src = orientationCalculator; break;
-                            default: continue;
+                            default: continue; // ignore anything we don't recognize
                         }
                         if (src.isSupported()) { // if the sensor is supported, send back all the content
                             src.calculate(); // compute software-emulated logic (if any)
@@ -374,12 +408,18 @@ public class MainActivity extends AppCompatActivity {
             tcpServerThread = new Thread(() -> {
                 byte[] buf = new byte[64];
                 while (true) {
-                    try {
-                        try (Socket client = tcpSocket.accept()) {
-                            int buflen = client.getInputStream().read(buf);
-                            if (buflen == 1 && buf[0] == 'D') {
+                    try (Socket client = tcpSocket.accept()) {
+                        int buflen = client.getInputStream().read(buf);
+
+                        // ignore anything that's invalid or fails to auth
+                        if (buflen != 9 || fromBEBytes(buf, 1, 8) != getPassword()) {
+                            continue;
+                        }
+
+                        switch (buf[0]) {
+                            case 'D':
                                 imgSnapshot.compress(Bitmap.CompressFormat.JPEG, 90, client.getOutputStream()); // netsblox has a max resolution anyway, so no need for 100% quality compression
-                            }
+                                break;
                         }
                     }
                     catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
@@ -445,8 +485,7 @@ public class MainActivity extends AppCompatActivity {
         try { macInt = prefs.getLong(MAC_ADDR_PREF_NAME, -1); }
         catch (Exception ignored) { Toast.makeText(this, ignored.toString(), Toast.LENGTH_LONG).show(); }
         if (macInt < 0) {
-            Random r = new Random(); // generate a random fake mac addr (new versions of android no longer support getting the real one)
-            r.nextBytes(macAddress);
+            rand.nextBytes(macAddress); // generate a random fake mac addr (new versions of android no longer support getting the real one)
 
             // cache the generated value in preferences (so multiple application starts have the same id)
             macInt = 0;
@@ -463,6 +502,10 @@ public class MainActivity extends AppCompatActivity {
         b.append("SalIO - ");
         appendBytes(b, macAddress);
         title.setText(b.toString());
+
+        // --------------------------------------------------
+
+        getNewPassword();
 
         // --------------------------------------------------
 
@@ -657,6 +700,8 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    // ------------------------------------------------------------------------------
+
     public void serverConnectButtonPress(View view) {
         connectToServer();
     }
@@ -677,4 +722,5 @@ public class MainActivity extends AppCompatActivity {
             }
         }
     }
+    public void newPasswordButtonClick(View view) { getNewPassword(); }
 }
