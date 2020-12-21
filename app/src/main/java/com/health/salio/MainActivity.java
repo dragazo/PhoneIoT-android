@@ -12,6 +12,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -26,9 +27,11 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PersistableBundle;
 import android.preference.PreferenceManager;
 import android.provider.MediaStore;
 import android.text.TextUtils;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -311,6 +314,94 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
+    private interface ICustomControl {
+        void draw(Canvas canvas, Paint paint);
+        boolean containsPoint(int x, int y);
+        void handleClick(Context context);
+    }
+    private class CustomButton implements ICustomControl {
+        private int posx, posy, width, height;
+        private int color, textColor;
+        private String text;
+
+        public CustomButton(int posx, int posy, int width, int height, int color, int textColor, String text) {
+            this.posx = posx;
+            this.posy = posy;
+            this.width = width;
+            this.height = height;
+            this.color = color;
+            this.textColor = textColor;
+            this.text = text;
+        }
+
+        @Override
+        public void draw(Canvas canvas, Paint paint) {
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawRect(posx, posy, posx + width, posy + height, paint);
+            paint.setColor(textColor);
+
+            Rect textBounds = new Rect();
+            paint.getTextBounds(text, 0, text.length(), textBounds);
+
+            paint.setTextAlign(Paint.Align.CENTER);
+            canvas.drawText(text, posx + width / 2, posy + (height + textBounds.height() - 4) / 2, paint);
+        }
+        @Override
+        public boolean containsPoint(int x, int y) {
+            return x >= posx && y >= posy && x <= posx + width && y <= posy + height;
+        }
+        @Override
+        public void handleClick(Context context) {
+            Toast.makeText(context, text, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private boolean controlPanelInitialized = false;
+    private List<ICustomControl> customControls = new ArrayList<>();
+    private boolean redrawCustomControls(boolean optional) {
+        if (optional && controlPanelInitialized) return true;
+        ImageView view = (ImageView)findViewById(R.id.controlPanel);
+        int width = view.getWidth();
+        int height = view.getHeight();
+        if (width <= 0 || height <= 0) return false;
+
+        Bitmap img = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(img);
+        Paint paint = new Paint();
+        paint.setColor(Color.RED);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(10);
+        paint.setTextSize(50 * ((float)height / 1200));
+        canvas.drawRect(0, 0, img.getWidth(), img.getHeight(), paint);
+
+        for (ICustomControl control : customControls) {
+            control.draw(canvas, paint);
+        }
+
+        view.setImageBitmap(img);
+        controlPanelInitialized = true;
+        return true;
+    }
+    private boolean handleCustomControlOnTouch(View view, MotionEvent e) {
+        List<ICustomControl> controls = customControls;
+        int x = (int)e.getX();
+        int y = (int)e.getY();
+
+        // find the first thing we clicked (iterate backwards because we draw forwards, so back is on top layer)
+        for (int i = controls.size() - 1; i >= 0; --i) {
+            ICustomControl control = controls.get(i);
+            if (control.containsPoint(x, y)) {
+                control.handleClick(this);
+                break;
+            }
+        }
+
+        return false;
+    }
+
+    // ----------------------------------------------
+
     private Random rand = new Random();
 
     private static final int SENSOR_DISPLAY_UPDATE_FREQUENCY = 1000;
@@ -583,18 +674,23 @@ public class MainActivity extends AppCompatActivity {
 
         // --------------------------------------------------
 
-//        Handler handler = new Handler();
-//        new Runnable() {
-//            @Override
-//            public void run() {
-//                try {
-//                    TextView sensorDisplay = (TextView)findViewById(R.id.sensorDisplay);
-//                    if (sensorDisplay.isShown()) sensorDisplay.setText(getSensorString());
-//                }// try block just in case (should never throw)
-//                catch (Exception ignored) {}
-//                finally { handler.postDelayed(this, SENSOR_DISPLAY_UPDATE_FREQUENCY); }
-//            }
-//        }.run();
+        ImageView controlsView = (ImageView)findViewById(R.id.controlPanel);
+        controlsView.setOnTouchListener((v, e) -> handleCustomControlOnTouch(v, e));
+
+        customControls.add(new CustomButton(50, 50, 400, 150, Color.BLUE, Color.WHITE, "hello world"));
+
+        // repeat canvas redraw until first success (we need to wait for control constraints to resolve to get size)
+        Handler handler = new Handler();
+        new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (redrawCustomControls(true)) return;
+                }
+                catch (Exception ignore) {}
+                handler.postDelayed(this, 100);
+            }
+        }.run();
     }
 
     private static void appendVector(StringBuilder b, float[] vec) {
