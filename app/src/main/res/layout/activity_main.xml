@@ -8,22 +8,6 @@
     android:focusableInTouchMode="true"
     tools:context=".ui.home.HomeFragment">
 
-    <TextView
-        android:id="@+id/sensorDisplay"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="32dp"
-        android:layout_marginLeft="32dp"
-        android:layout_marginTop="32dp"
-        android:layout_marginEnd="32dp"
-        android:layout_marginRight="32dp"
-        android:gravity="center_horizontal"
-        android:text="default text"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHorizontal_bias="1.0"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/titleText" />
-
     <EditText
         android:id="@+id/serverHostText"
         android:layout_width="0dp"
@@ -39,18 +23,20 @@
         android:text="10.0.0.23"
         app:layout_constraintBottom_toTopOf="@+id/connectButton"
         app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.0"
         app:layout_constraintStart_toStartOf="parent" />
 
     <Button
         android:id="@+id/connectButton"
-        android:layout_width="125dp"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginStart="16dp"
         android:layout_marginLeft="16dp"
         android:layout_marginBottom="16dp"
         android:onClick="serverConnectButtonPress"
         android:text="Connect"
-        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintBottom_toTopOf="@+id/updateAuthButton"
+        app:layout_constraintEnd_toEndOf="@+id/updateAuthButton"
         app:layout_constraintStart_toStartOf="parent" />
 
     <TextView
@@ -80,23 +66,23 @@
         android:layout_marginRight="16dp"
         android:layout_marginBottom="16dp"
         android:onClick="cameraButtonClick"
-        app:layout_constraintBottom_toTopOf="@+id/serverHostText"
+        app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/sensorDisplay"
+        app:layout_constraintStart_toEndOf="@+id/updateAuthButton"
+        app:layout_constraintTop_toBottomOf="@+id/serverHostText"
         tools:src="@tools:sample/avatars" />
 
     <Button
         android:id="@+id/updateAuthButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginEnd="16dp"
-        android:layout_marginRight="16dp"
+        android:layout_marginStart="16dp"
+        android:layout_marginLeft="16dp"
         android:layout_marginBottom="16dp"
         android:onClick="newPasswordButtonClick"
         android:text="New Password"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
+        app:layout_constraintStart_toStartOf="parent" />
 
     <TextView
         android:id="@+id/authText"

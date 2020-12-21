@@ -583,15 +583,18 @@ public class MainActivity extends AppCompatActivity {
 
         // --------------------------------------------------
 
-        Handler handler = new Handler();
-        new Runnable() {
-            @Override
-            public void run() {
-                try { updateSensorDisplay(); } // try block just in case (should never throw)
-                catch (Exception ignored) {}
-                finally { handler.postDelayed(this, SENSOR_DISPLAY_UPDATE_FREQUENCY); }
-            }
-        }.run();
+//        Handler handler = new Handler();
+//        new Runnable() {
+//            @Override
+//            public void run() {
+//                try {
+//                    TextView sensorDisplay = (TextView)findViewById(R.id.sensorDisplay);
+//                    if (sensorDisplay.isShown()) sensorDisplay.setText(getSensorString());
+//                }// try block just in case (should never throw)
+//                catch (Exception ignored) {}
+//                finally { handler.postDelayed(this, SENSOR_DISPLAY_UPDATE_FREQUENCY); }
+//            }
+//        }.run();
     }
 
     private static void appendVector(StringBuilder b, float[] vec) {
@@ -611,9 +614,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void updateSensorDisplay() {
-        TextView sensorDisplay = (TextView)findViewById(R.id.sensorDisplay);
-        if (!sensorDisplay.isShown()) return;
+    private String getSensorString() {
         StringBuilder b = new StringBuilder();
 
         // motion sensors
@@ -647,7 +648,7 @@ public class MainActivity extends AppCompatActivity {
             b.append('\n');
         }
 
-        sensorDisplay.setText(b.toString());
+        return b.toString();
     }
 
     private File createTempImageFile(String extension) throws IOException {
@@ -666,13 +667,9 @@ public class MainActivity extends AppCompatActivity {
     private Uri imageActivityUri = null;
     private String imageActivityCorrectedPath = null;
     private Bitmap grabResultImage() throws Exception {
-        System.err.println("here 1");
         ExifInterface exif = new ExifInterface(imageActivityCorrectedPath);
-        System.err.println("here 2");
         int orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
-        System.err.println("here 3");
         Bitmap raw = MediaStore.Images.Media.getBitmap(this.getContentResolver(), imageActivityUri);
-        System.err.println("here 4");
         switch (orientation) {
             case ExifInterface.ORIENTATION_ROTATE_90: return rotateImage(raw, 90);
             case ExifInterface.ORIENTATION_ROTATE_180: return rotateImage(raw, 180);
@@ -722,5 +719,13 @@ public class MainActivity extends AppCompatActivity {
             }
         }
     }
-    public void newPasswordButtonClick(View view) { getNewPassword(); }
+    public void newPasswordButtonClick(View view) {
+        new AlertDialog.Builder(this)
+                .setTitle("Confirmation")
+                .setMessage("Are you sure you want to regenerate the password? This may break active connections.")
+                .setIcon(android.R.drawable.ic_dialog_alert)
+                .setPositiveButton(android.R.string.yes, (d, w) -> getNewPassword())
+                .setNegativeButton(android.R.string.no, null)
+                .show();
+    }
 }
