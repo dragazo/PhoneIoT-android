@@ -323,7 +323,7 @@ public class MainActivity extends AppCompatActivity {
     private interface ICustomControl {
         void draw(Canvas canvas, Paint paint);
         boolean containsPoint(int x, int y);
-        void handleClick(Context context);
+        void handleClick(MainActivity context);
     }
     private class CustomButton implements ICustomControl {
         private int posx, posy, width, height;
@@ -353,14 +353,16 @@ public class MainActivity extends AppCompatActivity {
             paint.getTextBounds(text, 0, text.length(), textBounds);
 
             paint.setTextAlign(Paint.Align.CENTER);
-            canvas.drawText(text, posx + width / 2, posy + (height + textBounds.height() - 4) / 2, paint);
+            canvas.drawText(text, posx + (float)width / 2, posy + ((float)height + textBounds.height() - 4) / 2, paint);
         }
         @Override
         public boolean containsPoint(int x, int y) {
             return x >= posx && y >= posy && x <= posx + width && y <= posy + height;
         }
         @Override
-        public void handleClick(Context context) {
+        public void handleClick(MainActivity context) {
+            try { netsbloxSend(ByteBuffer.allocate(5).put((byte)'b').putInt(id).array(), netsbloxAddress); }
+            catch (Exception ignored) {}
             Toast.makeText(context, text, Toast.LENGTH_SHORT).show();
         }
     }
@@ -428,7 +430,10 @@ public class MainActivity extends AppCompatActivity {
 
     private Thread udpServerThread = null;
     private Thread tcpServerThread = null;
+    private Thread pipeThread = null;
     private long next_heartbeat = 0;
+
+    private final List<DatagramPacket> pipeQueue = new ArrayList<>();
 
     @FunctionalInterface
     private interface SensorConsumer {
@@ -505,14 +510,18 @@ public class MainActivity extends AppCompatActivity {
                             case 'X': handleSensor.apply(location); break;
                             case 'O': handleSensor.apply(orientationCalculator); break;
 
-                            case 'C': {
+                            case 'a': { // authenticate (no-op)
+                                netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
+                                break;
+                            }
+                            case 'C': { // clear custom controls
                                 if (packet.getLength() != 9) continue;
                                 customControls = new ArrayList<>(); // don't actually clear the one we already have, cause could be used by other threads
                                 redrawCustomControls(false);
                                 netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
                                 break;
                             }
-                            case 'B': {
+                            case 'B': { // add custom button control
                                 if (packet.getLength() < 37) continue;
                                 if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
                                     netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
@@ -578,6 +587,23 @@ public class MainActivity extends AppCompatActivity {
             });
             tcpServerThread.start();
         }
+        if (pipeThread == null) {
+            pipeThread = new Thread(() -> {
+                while (true) {
+                    try {
+                        synchronized (pipeQueue) {
+                            for (DatagramPacket packet : pipeQueue) {
+                                udpSocket.send(packet);
+                            }
+                            pipeQueue.clear();
+                            pipeQueue.wait();
+                        }
+                    }
+                    catch (Exception ignored) {}
+                }
+            });
+            pipeThread.start();
+        }
     }
     private void netsbloxSend(byte[] content, SocketAddress dest) throws Exception {
         if (udpSocket != null) {
@@ -586,7 +612,10 @@ public class MainActivity extends AppCompatActivity {
             for (int i = 0; i < 4; ++i) expanded[6 + i] = 0; // we can set the time field to zero (pretty sure it isn't actually used by the server)
             for (int i = 0; i < content.length; ++i) expanded[10 + i] = content[i];
             DatagramPacket packet = new DatagramPacket(expanded, expanded.length, dest);
-            udpSocket.send(packet);
+            synchronized (pipeQueue) {
+                pipeQueue.add(packet);
+                pipeQueue.notify();
+            }
         }
     }
 
