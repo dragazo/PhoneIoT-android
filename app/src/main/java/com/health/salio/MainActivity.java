@@ -311,6 +311,12 @@ public class MainActivity extends AppCompatActivity {
         for (int i = 0; i < length; ++i) res = (res << 8) | ((long)v[start + i] & 0xff);
         return res;
     }
+    private static int intFromBEBytes(byte[] v, int start) {
+        return (int)fromBEBytes(v, start, 4);
+    }
+    private static float floatFromBEBytes(byte[] v, int start) {
+        return Float.intBitsToFloat(intFromBEBytes(v, start));
+    }
 
     // ----------------------------------------------
 
@@ -322,15 +328,17 @@ public class MainActivity extends AppCompatActivity {
     private class CustomButton implements ICustomControl {
         private int posx, posy, width, height;
         private int color, textColor;
+        private int id;
         private String text;
 
-        public CustomButton(int posx, int posy, int width, int height, int color, int textColor, String text) {
+        public CustomButton(int posx, int posy, int width, int height, int color, int textColor, int id, String text) {
             this.posx = posx;
             this.posy = posy;
             this.width = width;
             this.height = height;
             this.color = color;
             this.textColor = textColor;
+            this.id = id;
             this.text = text;
         }
 
@@ -356,6 +364,8 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(context, text, Toast.LENGTH_SHORT).show();
         }
     }
+
+    private static final int MAX_CUSTOM_CONTROLS = 128;
 
     private boolean controlPanelInitialized = false;
     private List<ICustomControl> customControls = new ArrayList<>();
@@ -420,6 +430,11 @@ public class MainActivity extends AppCompatActivity {
     private Thread tcpServerThread = null;
     private long next_heartbeat = 0;
 
+    @FunctionalInterface
+    private interface SensorConsumer {
+        void apply(BasicSensor sensor) throws Exception;
+    }
+
     private void connectToServer() {
         if (udpSocket == null) {
             try { udpSocket = new DatagramSocket(UDP_PORT); }
@@ -457,35 +472,77 @@ public class MainActivity extends AppCompatActivity {
                         udpSocket.receive(packet);
 
                         // ignore anything that's invalid or fails to auth
-                        if (packet.getLength() != 9 || fromBEBytes(buf, 1, 8) != getPassword()) {
+                        if (packet.getLength() < 9 || fromBEBytes(buf, 1, 8) != getPassword()) {
                             continue;
                         }
 
+                        SensorConsumer handleSensor = src -> {
+                            if (packet.getLength() != 9) return;
+
+                            if (src.isSupported()) { // if the sensor is supported, send back all the content
+                                src.calculate(); // compute software-emulated logic (if any)
+                                float[] v = src.getData();
+                                ByteBuffer b = ByteBuffer.allocate(1 + v.length * 4).put(buf[0]);
+                                for (float val : v) b.putFloat(val);
+                                netsbloxSend(b.array(), packet.getSocketAddress());
+                            }
+                            // otherwise send back the acknowledgement, but no data
+                            else netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
+                        };
+
                         // otherwise do the actual request
-                        BasicSensor src;
                         switch (buf[0]) {
-                            case 'A': src = accelerometer; break;
-                            case 'G': src = gravity; break;
-                            case 'L': src = linearAcceleration; break;
-                            case 'Y': src = gyroscope; break;
-                            case 'R': src = rotationVector; break;
-                            case 'r': src = gameRotationVector; break;
-                            case 'M': src = magneticField; break;
-                            case 'P': src = proximity; break;
-                            case 'S': src = stepCounter; break;
-                            case 'l': src = light; break;
-                            case 'X': src = location; break;
-                            case 'O': src = orientationCalculator; break;
-                            default: continue; // ignore anything we don't recognize
+                            case 'A': handleSensor.apply(accelerometer); break;
+                            case 'G': handleSensor.apply(gravity); break;
+                            case 'L': handleSensor.apply(linearAcceleration); break;
+                            case 'Y': handleSensor.apply(gyroscope); break;
+                            case 'R': handleSensor.apply(rotationVector); break;
+                            case 'r': handleSensor.apply(gameRotationVector); break;
+                            case 'M': handleSensor.apply(magneticField); break;
+                            case 'P': handleSensor.apply(proximity); break;
+                            case 'S': handleSensor.apply(stepCounter); break;
+                            case 'l': handleSensor.apply(light); break;
+                            case 'X': handleSensor.apply(location); break;
+                            case 'O': handleSensor.apply(orientationCalculator); break;
+
+                            case 'C': {
+                                if (packet.getLength() != 9) continue;
+                                customControls = new ArrayList<>(); // don't actually clear the one we already have, cause could be used by other threads
+                                redrawCustomControls(false);
+                                netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
+                                break;
+                            }
+                            case 'B': {
+                                if (packet.getLength() < 37) continue;
+                                if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
+                                    netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
+                                    continue;
+                                }
+
+                                float x = floatFromBEBytes(buf, 9);
+                                float y = floatFromBEBytes(buf, 13);
+                                float width = floatFromBEBytes(buf, 17);
+                                float height = floatFromBEBytes(buf, 21);
+                                int color = intFromBEBytes(buf, 25);
+                                int textColor = intFromBEBytes(buf, 29);
+                                int id = intFromBEBytes(buf, 33);
+                                String text = new String(buf, 37, packet.getLength() - 37, "UTF-8");
+
+                                ImageView view = (ImageView)findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth();
+                                int viewHeight = view.getHeight();
+
+                                ICustomControl button = new CustomButton(
+                                        (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
+                                        (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
+                                        color, textColor, id, text);
+                                customControls.add(button);
+                                redrawCustomControls(false);
+
+                                netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                break;
+                            }
                         }
-                        if (src.isSupported()) { // if the sensor is supported, send back all the content
-                            src.calculate(); // compute software-emulated logic (if any)
-                            float[] v = src.getData();
-                            ByteBuffer b = ByteBuffer.allocate(1 + v.length * 4).put(buf[0]);
-                            for (float val : v) b.putFloat(val);
-                            netsbloxSend(b.array(), packet.getSocketAddress());
-                        }
-                        else netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress()); // otherwise send back the acknowledgement, but no data
                     }
                     catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
                     catch (Exception ex) {
@@ -677,7 +734,7 @@ public class MainActivity extends AppCompatActivity {
         ImageView controlsView = (ImageView)findViewById(R.id.controlPanel);
         controlsView.setOnTouchListener((v, e) -> handleCustomControlOnTouch(v, e));
 
-        customControls.add(new CustomButton(50, 50, 400, 150, Color.BLUE, Color.WHITE, "hello world"));
+        //customControls.add(new CustomButton(50, 50, 400, 150, Color.BLUE, Color.WHITE, "hello world"));
 
         // repeat canvas redraw until first success (we need to wait for control constraints to resolve to get size)
         Handler handler = new Handler();
