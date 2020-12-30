@@ -363,7 +363,88 @@ public class MainActivity extends AppCompatActivity {
         public void handleClick(MainActivity context) {
             try { netsbloxSend(ByteBuffer.allocate(5).put((byte)'b').putInt(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
-            Toast.makeText(context, text, Toast.LENGTH_SHORT).show();
+        }
+    }
+    private class CustomLabel implements ICustomControl {
+        private int posx, posy;
+        private int textColor;
+        private String text;
+
+        public CustomLabel(int posx, int posy, int textColor, String text) {
+            this.posx = posx;
+            this.posy = posy;
+            this.textColor = textColor;
+            this.text = text;
+        }
+
+        @Override
+        public void draw(Canvas canvas, Paint paint) {
+            paint.setColor(textColor);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTextAlign(Paint.Align.CENTER);
+            canvas.drawText(text, posx, posy, paint);
+        }
+        @Override
+        public boolean containsPoint(int x, int y) { return false; }
+        @Override
+        public void handleClick(MainActivity context) { }
+    }
+    private class CustomCheckbox implements ICustomControl {
+        private int posx, posy;
+        private int checkColor, textColor;
+        private boolean state;
+        int id;
+        private String text;
+
+        private static final int CHECKBOX_WIDTH = 35;
+
+        public CustomCheckbox(int posx, int posy, int checkColor, int textColor, boolean state, int id, String text) {
+            this.posx = posx;
+            this.posy = posy;
+            this.checkColor = checkColor;
+            this.textColor = textColor;
+            this.state = state;
+            this.id = id;
+            this.text = text;
+        }
+
+        @Override
+        public void draw(Canvas canvas, Paint paint) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2f);
+            paint.setColor(checkColor);
+            canvas.drawRect(posx, posy, posx + CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH, paint);
+
+            if (state) {
+                paint.setStrokeWidth(3f);
+                float x1 = posx + 5f, y1 = posy + (float)CHECKBOX_WIDTH * 0.5f;
+                float x2 = posx + (float)CHECKBOX_WIDTH * 0.5f, y2 = posy + CHECKBOX_WIDTH * 0.75f;
+                float x3 = posx + CHECKBOX_WIDTH, y3 = posy - (float)CHECKBOX_WIDTH * 0.5f;
+                canvas.drawLines(new float[] {
+                        x1, y1, x2, y2,
+                        x2, y2, x3, y3,
+                }, paint);
+            }
+
+            Rect textBounds = new Rect();
+            paint.getTextBounds(text, 0, text.length(), textBounds);
+
+            paint.setColor(textColor);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTextAlign(Paint.Align.LEFT);
+            canvas.drawText(text, posx + CHECKBOX_WIDTH + 17, posy + ((float)CHECKBOX_WIDTH + textBounds.height() - 4) / 2, paint);
+        }
+        @Override
+        public boolean containsPoint(int x, int y) {
+            return x >= posx && y >= posy && x <= posx + CHECKBOX_WIDTH && y <= posy + CHECKBOX_WIDTH;
+        }
+        @Override
+        public void handleClick(MainActivity context) {
+            state = !state;
+            context.redrawCustomControls(false);
+
+            try { netsbloxSend(ByteBuffer.allocate(6).put((byte)'z').putInt(id).put((byte)(state ? 1 : 0)).array(), netsbloxAddress); }
+            catch (Exception ignored) {}
         }
     }
 
@@ -551,6 +632,59 @@ public class MainActivity extends AppCompatActivity {
                                 netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
                                 break;
                             }
+                            case 'g': { // add custom label control
+                                if (packet.getLength() < 21) continue;
+                                if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
+                                    netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
+                                    continue;
+                                }
+
+                                float x = floatFromBEBytes(buf, 9);
+                                float y = floatFromBEBytes(buf, 13);
+                                int textColor = intFromBEBytes(buf, 17);
+                                String text = new String(buf, 21, packet.getLength() - 21, "UTF-8");
+
+                                ImageView view = (ImageView)findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth();
+                                int viewHeight = view.getHeight();
+
+                                ICustomControl label = new CustomLabel(
+                                        (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
+                                        textColor, text);
+                                customControls.add(label);
+                                redrawCustomControls(false);
+
+                                netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                break;
+                            }
+                            case 'Z': { // add custom checkbox control
+                                if (packet.getLength() < 30) continue;
+                                if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
+                                    netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
+                                    continue;
+                                }
+
+                                float x = floatFromBEBytes(buf, 9);
+                                float y = floatFromBEBytes(buf, 13);
+                                int checkColor = intFromBEBytes(buf, 17);
+                                int textColor = intFromBEBytes(buf, 21);
+                                boolean state = buf[25] != 0;
+                                int id = intFromBEBytes(buf, 26);
+                                String text = new String(buf, 30, packet.getLength() - 30, "UTF-8");
+
+                                ImageView view = (ImageView)findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth();
+                                int viewHeight = view.getHeight();
+
+                                ICustomControl checkbox = new CustomCheckbox(
+                                        (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
+                                        checkColor, textColor, state, id, text);
+                                customControls.add(checkbox);
+                                redrawCustomControls(false);
+
+                                netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                break;
+                            }
                         }
                     }
                     catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
@@ -660,7 +794,7 @@ public class MainActivity extends AppCompatActivity {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
         long macInt = -1;
         try { macInt = prefs.getLong(MAC_ADDR_PREF_NAME, -1); }
-        catch (Exception ignored) { Toast.makeText(this, ignored.toString(), Toast.LENGTH_LONG).show(); }
+        catch (Exception ex) { Toast.makeText(this, ex.toString(), Toast.LENGTH_LONG).show(); }
         if (macInt < 0) {
             rand.nextBytes(macAddress); // generate a random fake mac addr (new versions of android no longer support getting the real one)
 
@@ -759,6 +893,17 @@ public class MainActivity extends AppCompatActivity {
         else imgDisplay.setVisibility(View.INVISIBLE);
 
         // --------------------------------------------------
+
+
+
+        CustomCheckbox checkbox = new CustomCheckbox(100, 100, Color.RED, Color.GREEN, true, 70, "hello world!");
+        customControls.add(checkbox);
+        redrawCustomControls(false);
+
+
+
+
+
 
         ImageView controlsView = (ImageView)findViewById(R.id.controlPanel);
         controlsView.setOnTouchListener((v, e) -> handleCustomControlOnTouch(v, e));
