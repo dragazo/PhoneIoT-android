@@ -13,6 +13,7 @@ import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -397,6 +398,7 @@ public class MainActivity extends AppCompatActivity {
         private String text;
 
         private static final int CHECKBOX_WIDTH = 35;
+        private static final int CHECKBOX_PADDING = 15;
 
         public CustomCheckbox(int posx, int posy, int checkColor, int textColor, boolean state, int id, String text) {
             this.posx = posx;
@@ -436,7 +438,8 @@ public class MainActivity extends AppCompatActivity {
         }
         @Override
         public boolean containsPoint(int x, int y) {
-            return x >= posx && y >= posy && x <= posx + CHECKBOX_WIDTH && y <= posy + CHECKBOX_WIDTH;
+            return x >= posx - CHECKBOX_PADDING && y >= posy - CHECKBOX_PADDING &&
+                    x <= posx + CHECKBOX_WIDTH + CHECKBOX_PADDING && y <= posy + CHECKBOX_WIDTH + CHECKBOX_PADDING;
         }
         @Override
         public void handleClick(MainActivity context) {
@@ -444,6 +447,71 @@ public class MainActivity extends AppCompatActivity {
             context.redrawCustomControls(false);
 
             try { netsbloxSend(ByteBuffer.allocate(6).put((byte)'z').putInt(id).put((byte)(state ? 1 : 0)).array(), netsbloxAddress); }
+            catch (Exception ignored) {}
+        }
+    }
+    private class CustomRadioButton implements ICustomControl {
+        private int posx, posy;
+        private int checkColor, textColor;
+        private boolean state;
+        int id, group;
+        private String text;
+
+        private static final int RADIO_WIDTH = 35;
+        private static final int RADIO_PADDING = 15;
+        private static final int RADIO_INSET = 5;
+
+        public CustomRadioButton(int posx, int posy, int checkColor, int textColor, boolean state, int id, int group, String text) {
+            this.posx = posx;
+            this.posy = posy;
+            this.checkColor = checkColor;
+            this.textColor = textColor;
+            this.state = state;
+            this.id = id;
+            this.group = group;
+            this.text = text;
+        }
+
+        @Override
+        public void draw(Canvas canvas, Paint paint) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2f);
+            paint.setColor(checkColor);
+            canvas.drawArc(new RectF(posx, posy, posx + RADIO_WIDTH, posy + RADIO_WIDTH),
+                    0, 360, false, paint);
+
+            if (state) {
+                paint.setStyle(Paint.Style.FILL);
+                canvas.drawArc(new RectF(posx + RADIO_INSET, posy + RADIO_INSET, posx + RADIO_WIDTH - RADIO_INSET, posy + RADIO_WIDTH - RADIO_INSET),
+                        0, 360, false, paint);
+            }
+
+            Rect textBounds = new Rect();
+            paint.getTextBounds(text, 0, text.length(), textBounds);
+
+            paint.setColor(textColor);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTextAlign(Paint.Align.LEFT);
+            canvas.drawText(text, posx + RADIO_WIDTH + 17, posy + ((float)RADIO_WIDTH + textBounds.height() - 10) / 2, paint);
+        }
+        @Override
+        public boolean containsPoint(int x, int y) {
+            return x >= posx - RADIO_PADDING && y >= posy - RADIO_PADDING &&
+                    x <= posx + RADIO_WIDTH + RADIO_PADDING && y <= posy + RADIO_WIDTH + RADIO_PADDING;
+        }
+        @Override
+        public void handleClick(MainActivity context) {
+            // set state to true and uncheck every other radiobutton in the same group
+            state = true;
+            for (ICustomControl other : context.customControls) {
+                if (other != this && other instanceof CustomRadioButton) {
+                    CustomRadioButton b = (CustomRadioButton)other;
+                    if (b.group == this.group) b.state = false;
+                }
+            }
+            context.redrawCustomControls(false);
+
+            try { netsbloxSend(ByteBuffer.allocate(5).put((byte)'b').putInt(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
         }
     }
@@ -685,6 +753,35 @@ public class MainActivity extends AppCompatActivity {
                                 netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
                                 break;
                             }
+                            case 'y': { // add custom radiobutton control
+                                if (packet.getLength() < 34) continue;
+                                if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
+                                    netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
+                                    continue;
+                                }
+
+                                float x = floatFromBEBytes(buf, 9);
+                                float y = floatFromBEBytes(buf, 13);
+                                int checkColor = intFromBEBytes(buf, 17);
+                                int textColor = intFromBEBytes(buf, 21);
+                                boolean state = buf[25] != 0;
+                                int id = intFromBEBytes(buf, 26);
+                                int group = intFromBEBytes(buf, 30);
+                                String text = new String(buf, 34, packet.getLength() - 34, "UTF-8");
+
+                                ImageView view = (ImageView)findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth();
+                                int viewHeight = view.getHeight();
+
+                                ICustomControl radiobutton = new CustomRadioButton(
+                                        (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
+                                        checkColor, textColor, state, id, group, text);
+                                customControls.add(radiobutton);
+                                redrawCustomControls(false);
+
+                                netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                break;
+                            }
                         }
                     }
                     catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
@@ -896,10 +993,15 @@ public class MainActivity extends AppCompatActivity {
 
 
 
-        CustomCheckbox checkbox = new CustomCheckbox(100, 100, Color.RED, Color.GREEN, true, 70, "hello world!");
-        customControls.add(checkbox);
-        redrawCustomControls(false);
+        customControls.add(new CustomCheckbox(100, 100, Color.RED, Color.GREEN, true, 70, "hello world!"));
 
+        customControls.add(new CustomRadioButton(100, 200, Color.RED, Color.GREEN, true, 70, 66, "option 1"));
+        customControls.add(new CustomRadioButton(100, 300, Color.RED, Color.GREEN, false, 70, 66, "option 2"));
+        customControls.add(new CustomRadioButton(100, 400, Color.RED, Color.GREEN, false, 70, 66, "option 3"));
+
+        customControls.add(new CustomRadioButton(400, 200, Color.RED, Color.GREEN, false, 70, 67, "option 1"));
+        customControls.add(new CustomRadioButton(400, 300, Color.RED, Color.GREEN, false, 70, 67, "option 2"));
+        customControls.add(new CustomRadioButton(400, 400, Color.RED, Color.GREEN, false, 70, 67, "option 3"));
 
 
 
