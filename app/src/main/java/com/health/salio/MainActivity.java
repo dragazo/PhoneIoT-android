@@ -326,6 +326,13 @@ public class MainActivity extends AppCompatActivity {
         boolean containsPoint(int x, int y);
         void handleClick(MainActivity context);
     }
+    private interface IIdentifiable {
+        int getID();
+    }
+    private interface IToggleable extends IIdentifiable {
+        boolean getToggleState();
+    }
+
     private class CustomButton implements ICustomControl {
         private int posx, posy, width, height;
         private int color, textColor;
@@ -390,7 +397,7 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void handleClick(MainActivity context) { }
     }
-    private class CustomCheckbox implements ICustomControl {
+    private class CustomCheckbox implements ICustomControl, IToggleable {
         private int posx, posy;
         private int checkColor, textColor;
         private boolean state;
@@ -449,8 +456,14 @@ public class MainActivity extends AppCompatActivity {
             try { netsbloxSend(ByteBuffer.allocate(6).put((byte)'z').putInt(id).put((byte)(state ? 1 : 0)).array(), netsbloxAddress); }
             catch (Exception ignored) {}
         }
+
+        @Override
+        public int getID() { return id; }
+
+        @Override
+        public boolean getToggleState() { return state; }
     }
-    private class CustomRadioButton implements ICustomControl {
+    private class CustomRadioButton implements ICustomControl, IToggleable {
         private int posx, posy;
         private int checkColor, textColor;
         private boolean state;
@@ -514,6 +527,12 @@ public class MainActivity extends AppCompatActivity {
             try { netsbloxSend(ByteBuffer.allocate(5).put((byte)'b').putInt(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
         }
+
+        @Override
+        public int getID() { return id; }
+
+        @Override
+        public boolean getToggleState() { return state; }
     }
 
     private static final int MAX_CUSTOM_CONTROLS = 128;
@@ -662,6 +681,22 @@ public class MainActivity extends AppCompatActivity {
                             case 'a': { // authenticate (no-op)
                                 netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
                                 break;
+                            }
+                            case 'W': {
+                                if (packet.getLength() != 13) continue;
+                                int id = intFromBEBytes(buf, 9);
+
+                                byte res = 2; // default return value is 2 (id not found)
+                                for (ICustomControl control : customControls) {
+                                    if (control instanceof IToggleable) {
+                                        IToggleable t = (IToggleable)control;
+                                        if (t.getID() != id) continue;
+                                        res = (byte)(t.getToggleState() ? 1 : 0);
+                                        break;
+                                    }
+                                }
+
+                                netsbloxSend(new byte[] { buf[0], res }, packet.getSocketAddress());
                             }
                             case 'C': { // clear custom controls
                                 if (packet.getLength() != 9) continue;
@@ -991,26 +1026,8 @@ public class MainActivity extends AppCompatActivity {
 
         // --------------------------------------------------
 
-
-
-        customControls.add(new CustomCheckbox(100, 100, Color.RED, Color.GREEN, true, 70, "hello world!"));
-
-        customControls.add(new CustomRadioButton(100, 200, Color.RED, Color.GREEN, true, 70, 66, "option 1"));
-        customControls.add(new CustomRadioButton(100, 300, Color.RED, Color.GREEN, false, 70, 66, "option 2"));
-        customControls.add(new CustomRadioButton(100, 400, Color.RED, Color.GREEN, false, 70, 66, "option 3"));
-
-        customControls.add(new CustomRadioButton(400, 200, Color.RED, Color.GREEN, false, 70, 67, "option 1"));
-        customControls.add(new CustomRadioButton(400, 300, Color.RED, Color.GREEN, false, 70, 67, "option 2"));
-        customControls.add(new CustomRadioButton(400, 400, Color.RED, Color.GREEN, false, 70, 67, "option 3"));
-
-
-
-
-
         ImageView controlsView = (ImageView)findViewById(R.id.controlPanel);
         controlsView.setOnTouchListener((v, e) -> handleCustomControlOnTouch(v, e));
-
-        //customControls.add(new CustomButton(50, 50, 400, 150, Color.BLUE, Color.WHITE, "hello world"));
 
         // repeat canvas redraw until first success (we need to wait for control constraints to resolve to get size)
         Handler handler = new Handler();
