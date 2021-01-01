@@ -22,6 +22,7 @@ import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
 import android.media.ExifInterface;
+import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -94,6 +95,7 @@ public class MainActivity extends AppCompatActivity {
             new PermissionRequest(Manifest.permission.CAMERA, "Camera"),
             new PermissionRequest(Manifest.permission.READ_EXTERNAL_STORAGE, "Read External Storage"),
             new PermissionRequest(Manifest.permission.WRITE_EXTERNAL_STORAGE, "Write External Storage"),
+            new PermissionRequest(Manifest.permission.RECORD_AUDIO, "Record Audio"),
     };
 
     private static final String NOT_SUPPORTED_STRING = "Not Supported or Disabled";
@@ -277,6 +279,58 @@ public class MainActivity extends AppCompatActivity {
         public void calculate() { }
     }
     private LocationSensor location;
+
+    // ----------------------------------------------
+
+    private class SoundSensor implements BasicSensor {
+        private float[] data = new float[1];
+        private boolean supported = false;
+
+        private static final long SAMPLE_RATE = 250; // ms
+        private static final float NORMALIZATION_FACTOR = 32768.0f;
+
+        private MediaRecorder recorder;
+        private final Handler handler = new Handler();
+
+        public SoundSensor() {
+            try {
+                recorder = new MediaRecorder();
+                recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+                recorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP);
+                recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
+                recorder.setOutputFile("/dev/null"); // important: we don't want to save the recording (esp. since we never stop recording)
+                recorder.prepare();
+                recorder.start();
+                supported = true;
+
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            data[0] = (float)recorder.getMaxAmplitude() / NORMALIZATION_FACTOR;
+                        }
+                        catch (Exception ignore) { }
+                        handler.postDelayed(this, SAMPLE_RATE);
+                    }
+                }.run();
+            }
+            catch (Exception ignore) {
+                if (recorder != null) {
+                    recorder.release();
+                }
+                supported = false;
+            }
+        }
+
+        @Override
+        public boolean isSupported() { return supported; }
+        @Override
+        public float[] getData() { return data; }
+        @Override
+        public void calculate() { }
+    }
+
+    private SoundSensor soundSensor;
 
     // ----------------------------------------------
 
@@ -672,6 +726,7 @@ public class MainActivity extends AppCompatActivity {
                             case 'R': handleSensor.apply(rotationVector); break;
                             case 'r': handleSensor.apply(gameRotationVector); break;
                             case 'M': handleSensor.apply(magneticField); break;
+                            case 'm': handleSensor.apply(soundSensor); break;
                             case 'P': handleSensor.apply(proximity); break;
                             case 'S': handleSensor.apply(stepCounter); break;
                             case 'l': handleSensor.apply(light); break;
@@ -1004,6 +1059,10 @@ public class MainActivity extends AppCompatActivity {
 
         location = new LocationSensor(this);
         location.start();
+
+        // --------------------------------------------------
+
+        soundSensor = new SoundSensor();
 
         // --------------------------------------------------
 
