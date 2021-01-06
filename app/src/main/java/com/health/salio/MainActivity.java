@@ -40,6 +40,7 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.ColorRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
@@ -451,17 +452,22 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void handleClick(MainActivity context) { }
     }
+
+    private enum CheckboxStyle {
+        CheckBox, ToggleSwitch,
+    }
     private class CustomCheckbox implements ICustomControl, IToggleable {
         private int posx, posy;
         private int checkColor, textColor;
         private boolean state;
         int id;
         private String text;
+    private CheckboxStyle style;
 
         private static final int CHECKBOX_WIDTH = 35;
         private static final int CHECKBOX_PADDING = 15;
 
-        public CustomCheckbox(int posx, int posy, int checkColor, int textColor, boolean state, int id, String text) {
+        public CustomCheckbox(int posx, int posy, int checkColor, int textColor, boolean state, int id, String text, CheckboxStyle style) {
             this.posx = posx;
             this.posy = posy;
             this.checkColor = checkColor;
@@ -469,10 +475,10 @@ public class MainActivity extends AppCompatActivity {
             this.state = state;
             this.id = id;
             this.text = text;
+            this.style = style;
         }
 
-        @Override
-        public void draw(Canvas canvas, Paint paint) {
+        private void drawCheckbox(Canvas canvas, Paint paint) {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(2f);
             paint.setColor(checkColor);
@@ -497,10 +503,51 @@ public class MainActivity extends AppCompatActivity {
             paint.setTextAlign(Paint.Align.LEFT);
             canvas.drawText(text, posx + CHECKBOX_WIDTH + 17, posy + ((float)CHECKBOX_WIDTH + textBounds.height() - 4) / 2, paint);
         }
+        private void drawToggleswitch(Canvas canvas, Paint paint) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2f);
+            paint.setColor(checkColor);
+            canvas.drawArc(new RectF(posx, posy, posx + CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH), 90, 180, false, paint);
+            canvas.drawArc(new RectF(posx + CHECKBOX_WIDTH, posy, posx + 2 * CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH), 270, 180, false, paint);
+            canvas.drawLine(posx + 0.5f * CHECKBOX_WIDTH, posy, posx + 1.5f * CHECKBOX_WIDTH, posy, paint);
+            canvas.drawLine(posx + 0.5f * CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH, posx + 1.5f * CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH, paint);
+
+            float checkPosX;
+            if (state) {
+                paint.setStyle(Paint.Style.FILL);
+                checkPosX = posx + CHECKBOX_WIDTH;
+            }
+            else {
+                checkPosX = posx;
+            }
+            canvas.drawArc(new RectF(checkPosX + 5, posy + 5, checkPosX + CHECKBOX_WIDTH - 5, posy + CHECKBOX_WIDTH - 5), 0, 360, false, paint);
+
+            Rect textBounds = new Rect();
+            paint.getTextBounds(text, 0, text.length(), textBounds);
+
+            paint.setColor(textColor);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTextAlign(Paint.Align.LEFT);
+            canvas.drawText(text, posx + 2.5f * CHECKBOX_WIDTH + 17, posy + ((float)CHECKBOX_WIDTH + textBounds.height() - 4) / 2, paint);
+        }
+
+        @Override
+        public void draw(Canvas canvas, Paint paint) {
+            switch (style) {
+                case CheckBox: drawCheckbox(canvas, paint); break;
+                case ToggleSwitch: drawToggleswitch(canvas, paint); break;
+            }
+        }
         @Override
         public boolean containsPoint(int x, int y) {
-            return x >= posx - CHECKBOX_PADDING && y >= posy - CHECKBOX_PADDING &&
-                    x <= posx + CHECKBOX_WIDTH + CHECKBOX_PADDING && y <= posy + CHECKBOX_WIDTH + CHECKBOX_PADDING;
+            RectF rect;
+            switch (style) {
+                case CheckBox: rect = new RectF(posx, posy, posx + CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH); break;
+                case ToggleSwitch: rect = new RectF(posx, posy, posx + 2 * CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH); break;
+                default: rect = new RectF(0, 0, 0, 0); break;
+            }
+            return x >= rect.left - CHECKBOX_PADDING && y >= rect.top - CHECKBOX_PADDING &&
+                    x <= rect.right + CHECKBOX_PADDING && y <= rect.bottom + CHECKBOX_PADDING;
         }
         @Override
         public void handleClick(MainActivity context) {
@@ -816,7 +863,7 @@ public class MainActivity extends AppCompatActivity {
                                 break;
                             }
                             case 'Z': { // add custom checkbox control
-                                if (packet.getLength() < 30) continue;
+                                if (packet.getLength() < 31) continue;
                                 if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
                                     netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
                                     continue;
@@ -828,7 +875,12 @@ public class MainActivity extends AppCompatActivity {
                                 int textColor = intFromBEBytes(buf, 21);
                                 boolean state = buf[25] != 0;
                                 int id = intFromBEBytes(buf, 26);
-                                String text = new String(buf, 30, packet.getLength() - 30, "UTF-8");
+                                CheckboxStyle style;
+                                switch (buf[30]) {
+                                    case 0: default: style = CheckboxStyle.CheckBox; break;
+                                    case 1: style = CheckboxStyle.ToggleSwitch; break;
+                                }
+                                String text = new String(buf, 31, packet.getLength() - 31, "UTF-8");
 
                                 ImageView view = (ImageView)findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth();
@@ -836,7 +888,7 @@ public class MainActivity extends AppCompatActivity {
 
                                 ICustomControl checkbox = new CustomCheckbox(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
-                                        checkColor, textColor, state, id, text);
+                                        checkColor, textColor, state, id, text, style);
                                 customControls.add(checkbox);
                                 redrawCustomControls(false);
 
@@ -1100,6 +1152,11 @@ public class MainActivity extends AppCompatActivity {
                 handler.postDelayed(this, 100);
             }
         }.run();
+
+        customControls.add(new CustomCheckbox(50, 100, Color.BLUE, Color.BLACK, false, 324, "hello world!", CheckboxStyle.CheckBox));
+        customControls.add(new CustomCheckbox(350, 100, Color.BLUE, Color.BLACK, true, 325, "hello world!", CheckboxStyle.CheckBox));
+        customControls.add(new CustomCheckbox(50, 300, Color.BLUE, Color.BLACK, false, 326, "hello world!", CheckboxStyle.ToggleSwitch));
+        customControls.add(new CustomCheckbox(350, 300, Color.BLUE, Color.BLACK, true, 327, "hello world!", CheckboxStyle.ToggleSwitch));
     }
 
     private static void appendVector(StringBuilder b, float[] vec) {
