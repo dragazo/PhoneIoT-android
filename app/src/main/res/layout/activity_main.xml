@@ -20,7 +20,7 @@
         android:ems="10"
         android:gravity="center_horizontal|fill_vertical"
         android:inputType="textPersonName"
-        android:text="10.0.0.23"
+        android:text="10.0.0.24"
         app:layout_constraintBottom_toTopOf="@+id/connectButton"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintHorizontal_bias="0.0"

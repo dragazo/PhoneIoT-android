@@ -70,6 +70,7 @@ import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Random;
@@ -263,7 +264,6 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public void onLocationChanged(Location loc) {
-            System.err.printf("updating to %s %s", loc.getLatitude(), loc.getLongitude());
             data[0] = (float)loc.getLatitude();
             data[1] = (float)loc.getLongitude();
         }
@@ -347,7 +347,7 @@ public class MainActivity extends AppCompatActivity {
     public long getPassword() {
         long nowtime = System.currentTimeMillis();
         if (nowtime < _passwordExpiry) return _rawPassword;
-        _rawPassword = rand.nextLong() & Long.MAX_VALUE; // password is a 63-bit (positive) value
+        _rawPassword = rand.nextLong() & Long.MAX_VALUE & 0; // password is a 63-bit (positive) value
         _passwordExpiry = nowtime + PASSWORD_EXPIRY_INTERVAL;
 
         TextView text = (TextView)findViewById(R.id.authText);
@@ -380,21 +380,19 @@ public class MainActivity extends AppCompatActivity {
         void draw(Canvas canvas, Paint paint);
         boolean containsPoint(int x, int y);
         void handleClick(MainActivity context);
+        byte[] getID();
     }
-    private interface IIdentifiable {
-        int getID();
-    }
-    private interface IToggleable extends IIdentifiable {
+    private interface IToggleable {
         boolean getToggleState();
     }
 
     private class CustomButton implements ICustomControl {
         private int posx, posy, width, height;
         private int color, textColor;
-        private int id;
+        private byte[] id;
         private String text;
 
-        public CustomButton(int posx, int posy, int width, int height, int color, int textColor, int id, String text) {
+        public CustomButton(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text) {
             this.posx = posx;
             this.posy = posy;
             this.width = width;
@@ -424,19 +422,23 @@ public class MainActivity extends AppCompatActivity {
         }
         @Override
         public void handleClick(MainActivity context) {
-            try { netsbloxSend(ByteBuffer.allocate(5).put((byte)'b').putInt(id).array(), netsbloxAddress); }
+            try { netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
         }
+        @Override
+        public byte[] getID() { return id; }
     }
     private class CustomLabel implements ICustomControl {
         private int posx, posy;
         private int textColor;
+        private byte[] id;
         private String text;
 
-        public CustomLabel(int posx, int posy, int textColor, String text) {
+        public CustomLabel(int posx, int posy, int textColor, byte[] id, String text) {
             this.posx = posx;
             this.posy = posy;
             this.textColor = textColor;
+            this.id = id;
             this.text = text;
         }
 
@@ -444,13 +446,19 @@ public class MainActivity extends AppCompatActivity {
         public void draw(Canvas canvas, Paint paint) {
             paint.setColor(textColor);
             paint.setStyle(Paint.Style.FILL);
-            paint.setTextAlign(Paint.Align.CENTER);
-            canvas.drawText(text, posx, posy, paint);
+            paint.setTextAlign(Paint.Align.LEFT);
+
+            Rect textBounds = new Rect();
+            paint.getTextBounds(text, 0, text.length(), textBounds);
+
+            canvas.drawText(text, posx, posy + textBounds.height() - 6, paint);
         }
         @Override
         public boolean containsPoint(int x, int y) { return false; }
         @Override
         public void handleClick(MainActivity context) { }
+        @Override
+        public byte[] getID() { return id; }
     }
 
     private enum CheckboxStyle {
@@ -460,14 +468,14 @@ public class MainActivity extends AppCompatActivity {
         private int posx, posy;
         private int checkColor, textColor;
         private boolean state;
-        int id;
+        private byte[] id;
         private String text;
-    private CheckboxStyle style;
+        private CheckboxStyle style;
 
         private static final int CHECKBOX_WIDTH = 35;
         private static final int CHECKBOX_PADDING = 15;
 
-        public CustomCheckbox(int posx, int posy, int checkColor, int textColor, boolean state, int id, String text, CheckboxStyle style) {
+        public CustomCheckbox(int posx, int posy, int checkColor, int textColor, boolean state, byte[] id, String text, CheckboxStyle style) {
             this.posx = posx;
             this.posy = posy;
             this.checkColor = checkColor;
@@ -554,12 +562,11 @@ public class MainActivity extends AppCompatActivity {
             state = !state;
             context.redrawCustomControls(false);
 
-            try { netsbloxSend(ByteBuffer.allocate(6).put((byte)'z').putInt(id).put((byte)(state ? 1 : 0)).array(), netsbloxAddress); }
+            try { netsbloxSend(ByteBuffer.allocate(2 + id.length).put((byte)'z').put((byte)(state ? 1 : 0)).put(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
         }
-
         @Override
-        public int getID() { return id; }
+        public byte[] getID() { return id; }
 
         @Override
         public boolean getToggleState() { return state; }
@@ -568,14 +575,14 @@ public class MainActivity extends AppCompatActivity {
         private int posx, posy;
         private int checkColor, textColor;
         private boolean state;
-        int id, group;
+        byte[] id, group;
         private String text;
 
         private static final int RADIO_WIDTH = 35;
         private static final int RADIO_PADDING = 15;
         private static final int RADIO_INSET = 5;
 
-        public CustomRadioButton(int posx, int posy, int checkColor, int textColor, boolean state, int id, int group, String text) {
+        public CustomRadioButton(int posx, int posy, int checkColor, int textColor, boolean state, byte[] id, byte[] group, String text) {
             this.posx = posx;
             this.posy = posy;
             this.checkColor = checkColor;
@@ -620,17 +627,17 @@ public class MainActivity extends AppCompatActivity {
             for (ICustomControl other : context.customControls) {
                 if (other != this && other instanceof CustomRadioButton) {
                     CustomRadioButton b = (CustomRadioButton)other;
-                    if (b.group == this.group) b.state = false;
+                    if (Arrays.equals(b.group, this.group)) b.state = false;
                 }
             }
             context.redrawCustomControls(false);
 
-            try { netsbloxSend(ByteBuffer.allocate(5).put((byte)'b').putInt(id).array(), netsbloxAddress); }
+            try { netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
         }
 
         @Override
-        public int getID() { return id; }
+        public byte[] getID() { return id; }
 
         @Override
         public boolean getToggleState() { return state; }
@@ -662,6 +669,15 @@ public class MainActivity extends AppCompatActivity {
 
         view.setImageBitmap(img);
         controlPanelInitialized = true;
+        return true;
+    }
+    private boolean tryAddCustomControl(ICustomControl control) {
+        byte[] id = control.getID();
+        for (ICustomControl other : customControls) {
+            if (Arrays.equals(id, other.getID())) return false;
+        }
+        customControls.add(control);
+        redrawCustomControls(false);
         return true;
     }
     private boolean handleCustomControlOnTouch(View view, MotionEvent e) {
@@ -785,15 +801,14 @@ public class MainActivity extends AppCompatActivity {
                                 break;
                             }
                             case 'W': {
-                                if (packet.getLength() != 13) continue;
-                                int id = intFromBEBytes(buf, 9);
+                                if (packet.getLength() < 9) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
 
                                 byte res = 2; // default return value is 2 (id not found)
                                 for (ICustomControl control : customControls) {
                                     if (control instanceof IToggleable) {
-                                        IToggleable t = (IToggleable)control;
-                                        if (t.getID() != id) continue;
-                                        res = (byte)(t.getToggleState() ? 1 : 0);
+                                        if (!Arrays.equals(control.getID(), id)) continue;
+                                        res = (byte)(((IToggleable)control).getToggleState() ? 1 : 0);
                                         break;
                                     }
                                 }
@@ -808,9 +823,9 @@ public class MainActivity extends AppCompatActivity {
                                 break;
                             }
                             case 'B': { // add custom button control
-                                if (packet.getLength() < 37) continue;
+                                if (packet.getLength() < 34) continue;
                                 if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
-                                    netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
+                                    netsbloxSend(new byte[]{buf[0], 1}, packet.getSocketAddress()); // if we hit controls limit, don't add
                                     continue;
                                 }
 
@@ -820,8 +835,15 @@ public class MainActivity extends AppCompatActivity {
                                 float height = floatFromBEBytes(buf, 21);
                                 int color = intFromBEBytes(buf, 25);
                                 int textColor = intFromBEBytes(buf, 29);
-                                int id = intFromBEBytes(buf, 33);
-                                String text = new String(buf, 37, packet.getLength() - 37, "UTF-8");
+                                int idlen = (int)buf[33] & 0xff;
+                                if (packet.getLength() < 34 + idlen) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 34, 34 + idlen);
+                                String text = new String(buf, 34 + idlen, packet.getLength() - (34 + idlen), "UTF-8");
+
+                                if (id == null) {
+                                    netsbloxSend(new byte[]{buf[0], 2}, packet.getSocketAddress()); // if id already existed, don't make another
+                                    continue;
+                                }
 
                                 ImageView view = (ImageView)findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth();
@@ -831,14 +853,12 @@ public class MainActivity extends AppCompatActivity {
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
                                         color, textColor, id, text);
-                                customControls.add(button);
-                                redrawCustomControls(false);
 
-                                netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(button) ? 0 : 2) }, packet.getSocketAddress());
                                 break;
                             }
                             case 'g': { // add custom label control
-                                if (packet.getLength() < 21) continue;
+                                if (packet.getLength() < 22) continue;
                                 if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
                                     netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
                                     continue;
@@ -847,7 +867,10 @@ public class MainActivity extends AppCompatActivity {
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 int textColor = intFromBEBytes(buf, 17);
-                                String text = new String(buf, 21, packet.getLength() - 21, "UTF-8");
+                                int idlen = (int)buf[21] & 0xff;
+                                if (packet.getLength() < 22 + idlen) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 22, 22 + idlen);
+                                String text = new String(buf, 22 + idlen, packet.getLength() - (22 + idlen), "UTF-8");
 
                                 ImageView view = (ImageView)findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth();
@@ -855,15 +878,13 @@ public class MainActivity extends AppCompatActivity {
 
                                 ICustomControl label = new CustomLabel(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
-                                        textColor, text);
-                                customControls.add(label);
-                                redrawCustomControls(false);
+                                        textColor, id, text);
 
-                                netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(label) ? 0 : 2) }, packet.getSocketAddress());
                                 break;
                             }
                             case 'Z': { // add custom checkbox control
-                                if (packet.getLength() < 31) continue;
+                                if (packet.getLength() < 28) continue;
                                 if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
                                     netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
                                     continue;
@@ -874,13 +895,15 @@ public class MainActivity extends AppCompatActivity {
                                 int checkColor = intFromBEBytes(buf, 17);
                                 int textColor = intFromBEBytes(buf, 21);
                                 boolean state = buf[25] != 0;
-                                int id = intFromBEBytes(buf, 26);
                                 CheckboxStyle style;
-                                switch (buf[30]) {
+                                switch (buf[26]) {
                                     case 0: default: style = CheckboxStyle.CheckBox; break;
                                     case 1: style = CheckboxStyle.ToggleSwitch; break;
                                 }
-                                String text = new String(buf, 31, packet.getLength() - 31, "UTF-8");
+                                int idlen = (int)buf[27] & 0xff;
+                                if (packet.getLength() < 28 + idlen) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 28, 28 + idlen);
+                                String text = new String(buf, 28 + idlen, packet.getLength() - (28 + idlen), "UTF-8");
 
                                 ImageView view = (ImageView)findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth();
@@ -889,14 +912,12 @@ public class MainActivity extends AppCompatActivity {
                                 ICustomControl checkbox = new CustomCheckbox(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         checkColor, textColor, state, id, text, style);
-                                customControls.add(checkbox);
-                                redrawCustomControls(false);
 
-                                netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(checkbox) ? 0 : 2) }, packet.getSocketAddress());
                                 break;
                             }
                             case 'y': { // add custom radiobutton control
-                                if (packet.getLength() < 34) continue;
+                                if (packet.getLength() < 27) continue;
                                 if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
                                     netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
                                     continue;
@@ -907,9 +928,13 @@ public class MainActivity extends AppCompatActivity {
                                 int checkColor = intFromBEBytes(buf, 17);
                                 int textColor = intFromBEBytes(buf, 21);
                                 boolean state = buf[25] != 0;
-                                int id = intFromBEBytes(buf, 26);
-                                int group = intFromBEBytes(buf, 30);
-                                String text = new String(buf, 34, packet.getLength() - 34, "UTF-8");
+                                int idlen = (int)buf[26] & 0xff;
+                                if (packet.getLength() < 27 + idlen + 1) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 27, 27 + idlen);
+                                int grouplen = (int)buf[27 + idlen] & 0xff;
+                                if (packet.getLength() < 27 + idlen + 1 + grouplen) continue;
+                                byte[] group = Arrays.copyOfRange(buf, 27 + idlen + 1, 27 + idlen + 1 + grouplen);
+                                String text = new String(buf, 27 + idlen + 1 + grouplen, packet.getLength() - (27 + idlen + 1 + grouplen), "UTF-8");
 
                                 ImageView view = (ImageView)findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth();
@@ -918,10 +943,8 @@ public class MainActivity extends AppCompatActivity {
                                 ICustomControl radiobutton = new CustomRadioButton(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         checkColor, textColor, state, id, group, text);
-                                customControls.add(radiobutton);
-                                redrawCustomControls(false);
 
-                                netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(radiobutton) ? 0 : 2) }, packet.getSocketAddress());
                                 break;
                             }
                         }
@@ -1152,11 +1175,6 @@ public class MainActivity extends AppCompatActivity {
                 handler.postDelayed(this, 100);
             }
         }.run();
-
-        customControls.add(new CustomCheckbox(50, 100, Color.BLUE, Color.BLACK, false, 324, "hello world!", CheckboxStyle.CheckBox));
-        customControls.add(new CustomCheckbox(350, 100, Color.BLUE, Color.BLACK, true, 325, "hello world!", CheckboxStyle.CheckBox));
-        customControls.add(new CustomCheckbox(50, 300, Color.BLUE, Color.BLACK, false, 326, "hello world!", CheckboxStyle.ToggleSwitch));
-        customControls.add(new CustomCheckbox(350, 300, Color.BLUE, Color.BLACK, true, 327, "hello world!", CheckboxStyle.ToggleSwitch));
     }
 
     private static void appendVector(StringBuilder b, float[] vec) {
