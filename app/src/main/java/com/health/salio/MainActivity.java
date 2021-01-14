@@ -32,6 +32,8 @@ import android.os.Looper;
 import android.os.PersistableBundle;
 import android.preference.PreferenceManager;
 import android.provider.MediaStore;
+import android.text.StaticLayout;
+import android.text.TextPaint;
 import android.text.TextUtils;
 import android.view.MotionEvent;
 import android.view.View;
@@ -60,6 +62,7 @@ import com.google.android.gms.tasks.Task;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
@@ -428,6 +431,88 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public byte[] getID() { return id; }
     }
+    private class CustomTextField implements ICustomControl {
+        private int posx, posy, width, height;
+        private int color, textColor;
+        private byte[] id;
+        private String text;
+
+        private static final int PADDING = 10;
+
+        public CustomTextField(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text) {
+            this.posx = posx;
+            this.posy = posy;
+            this.width = width;
+            this.height = height;
+            this.color = color;
+            this.textColor = textColor;
+            this.id = id;
+            this.text = text;
+        }
+
+        @Override
+        public void draw(Canvas canvas, Paint paint) {
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2f);
+            canvas.drawRect(posx, posy, posx + width, posy + height, paint);
+            paint.setColor(textColor);
+
+            Rect textBounds = new Rect();
+            paint.getTextBounds(text, 0, text.length(), textBounds);
+
+            paint.setTextAlign(Paint.Align.LEFT);
+            paint.setStyle(Paint.Style.FILL);
+
+            if (Build.VERSION.SDK_INT >= 23) {
+                TextPaint textPaint = new TextPaint(paint);
+                StaticLayout layout = StaticLayout.Builder.obtain(text, 0, text.length(), textPaint, width - 2 * PADDING).build();
+
+                canvas.save();
+                canvas.translate(posx + PADDING, posy);
+                layout.draw(canvas);
+                canvas.restore();
+            }
+            else {
+                canvas.drawText(text, posx + (float)width / 2, posy + ((float)height + textBounds.height() - 4) / 2, paint);
+            }
+        }
+
+        @Override
+        public boolean containsPoint(int x, int y) {
+            return x >= posx && y >= posy && x <= posx + width && y <= posy + height;
+        }
+        @Override
+        public void handleClick(MainActivity context) {
+            try {
+                AlertDialog.Builder prompt = new AlertDialog.Builder(context);
+                prompt.setMessage("Message");
+                prompt.setTitle("Title");
+
+                EditText field = new EditText(context);
+                field.setText(text);
+                prompt.setView(field);
+
+                prompt.setPositiveButton("Ok", (d,w) -> {
+                    text = field.getText().toString();
+                    redrawCustomControls(false);
+
+                    // send update notification to server
+                    try {
+                        byte[] t = text.getBytes("UTF-8");
+                        netsbloxSend(ByteBuffer.allocate(2 + id.length + t.length).put((byte)'t').put((byte)id.length).put(id).put(t).array(), netsbloxAddress);
+                    }
+                    catch (Exception ignored) {}
+                });
+                prompt.setNegativeButton("Cancel", (d,w) -> {});
+
+                prompt.show();
+            }
+            catch (Exception ignored) {}
+        }
+        @Override
+        public byte[] getID() { return id; }
+    }
     private class CustomLabel implements ICustomControl {
         private int posx, posy;
         private int textColor;
@@ -536,7 +621,7 @@ public class MainActivity extends AppCompatActivity {
             paint.setColor(textColor);
             paint.setStyle(Paint.Style.FILL);
             paint.setTextAlign(Paint.Align.LEFT);
-            canvas.drawText(text, posx + 2.5f * CHECKBOX_WIDTH + 17, posy + ((float)CHECKBOX_WIDTH + textBounds.height() - 4) / 2, paint);
+            canvas.drawText(text, posx + 2f * CHECKBOX_WIDTH + 17, posy + ((float)CHECKBOX_WIDTH + textBounds.height() - 4) / 2, paint);
         }
 
         @Override
@@ -817,8 +902,22 @@ public class MainActivity extends AppCompatActivity {
                             }
                             case 'C': { // clear custom controls
                                 if (packet.getLength() != 9) continue;
-                                customControls = new ArrayList<>(); // don't actually clear the one we already have, cause could be used by other threads
+                                customControls.clear();
                                 redrawCustomControls(false);
+                                netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
+                                break;
+                            }
+                            case 'c': {
+                                if (packet.getLength() < 9) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
+                                for (int i = 0; i < customControls.size(); ++i) {
+                                    ICustomControl control = customControls.get(i);
+                                    if (Arrays.equals(control.getID(), id)) {
+                                        customControls.remove(i);
+                                        redrawCustomControls(false);
+                                        break;
+                                    }
+                                }
                                 netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
                                 break;
                             }
@@ -850,6 +949,41 @@ public class MainActivity extends AppCompatActivity {
                                 int viewHeight = view.getHeight();
 
                                 ICustomControl button = new CustomButton(
+                                        (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
+                                        (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
+                                        color, textColor, id, text);
+
+                                netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(button) ? 0 : 2) }, packet.getSocketAddress());
+                                break;
+                            }
+                            case 'T': { // add custom button control
+                                if (packet.getLength() < 34) continue;
+                                if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
+                                    netsbloxSend(new byte[]{buf[0], 1}, packet.getSocketAddress()); // if we hit controls limit, don't add
+                                    continue;
+                                }
+
+                                float x = floatFromBEBytes(buf, 9);
+                                float y = floatFromBEBytes(buf, 13);
+                                float width = floatFromBEBytes(buf, 17);
+                                float height = floatFromBEBytes(buf, 21);
+                                int color = intFromBEBytes(buf, 25);
+                                int textColor = intFromBEBytes(buf, 29);
+                                int idlen = (int)buf[33] & 0xff;
+                                if (packet.getLength() < 34 + idlen) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 34, 34 + idlen);
+                                String text = new String(buf, 34 + idlen, packet.getLength() - (34 + idlen), "UTF-8");
+
+                                if (id == null) {
+                                    netsbloxSend(new byte[]{buf[0], 2}, packet.getSocketAddress()); // if id already existed, don't make another
+                                    continue;
+                                }
+
+                                ImageView view = (ImageView)findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth();
+                                int viewHeight = view.getHeight();
+
+                                ICustomControl button = new CustomTextField(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
                                         color, textColor, id, text);
