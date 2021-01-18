@@ -18,11 +18,13 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.icu.util.Output;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
 import android.media.ExifInterface;
 import android.media.MediaRecorder;
+import android.media.audiofx.AudioEffect;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -62,9 +64,12 @@ import com.google.android.gms.tasks.Task;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -338,10 +343,6 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
-    private Bitmap imgSnapshot;
-
-    // ----------------------------------------------
-
     private static final long PASSWORD_EXPIRY_INTERVAL = 1 * 1000 * 60 * 60 * 24; // expire after one day
 
     private long _rawPassword = 0;
@@ -350,7 +351,7 @@ public class MainActivity extends AppCompatActivity {
     public long getPassword() {
         long nowtime = System.currentTimeMillis();
         if (nowtime < _passwordExpiry) return _rawPassword;
-        _rawPassword = rand.nextLong() & Long.MAX_VALUE & 0; // password is a 63-bit (positive) value
+        _rawPassword = rand.nextLong() & Long.MAX_VALUE; // password is a 63-bit (positive) value
         _passwordExpiry = nowtime + PASSWORD_EXPIRY_INTERVAL;
 
         TextView text = (TextView)findViewById(R.id.authText);
@@ -377,6 +378,15 @@ public class MainActivity extends AppCompatActivity {
         return Float.intBitsToFloat(intFromBEBytes(v, start));
     }
 
+    private static byte[] intToBEBytes(int val) {
+        return new byte[]{
+                (byte)(val >> 24),
+                (byte)(val >> 16),
+                (byte)(val >> 8),
+                (byte)val,
+        };
+    }
+
     // ----------------------------------------------
 
     private interface ICustomControl {
@@ -387,6 +397,10 @@ public class MainActivity extends AppCompatActivity {
     }
     private interface IToggleable {
         boolean getToggleState();
+    }
+    private interface IImageLike {
+        Bitmap getImage();
+        void setImage(Bitmap newimg, boolean recycleOld);
     }
 
     private class CustomButton implements ICustomControl {
@@ -425,11 +439,60 @@ public class MainActivity extends AppCompatActivity {
         }
         @Override
         public void handleClick(MainActivity context) {
-            try { netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress); }
+            try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
         }
         @Override
         public byte[] getID() { return id; }
+    }
+    private class CustomImageBox implements ICustomControl, IImageLike {
+        private int posx, posy, width, height;
+        private byte[] id;
+        private Bitmap img;
+
+        public CustomImageBox(int posx, int posy, int width, int height, byte[] id, Bitmap img) {
+            this.posx = posx;
+            this.posy = posy;
+            this.width = width;
+            this.height = height;
+            this.id = id;
+            this.img = img;
+        }
+
+        @Override
+        public void draw(Canvas canvas, Paint paint) {
+            paint.setColor(Color.BLACK);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2f);
+            canvas.drawRect(posx, posy, posx + width, posy + height, paint);
+
+            float w = (float)img.getWidth(), h = (float)img.getHeight();
+            float mult = Math.min((float)width / w, (float)height / h);
+            Rect src = new Rect(0, 0, (int)w, (int)h);
+            Rect dest = new Rect(posx, posy, posx + (int)(w * mult), posy + (int)(h * mult));
+            canvas.drawBitmap(img, src, dest, paint);
+        }
+
+        @Override
+        public boolean containsPoint(int x, int y) {
+            return x >= posx && y >= posy && x <= posx + width && y <= posy + height;
+        }
+        @Override
+        public void handleClick(MainActivity context) {
+            requestImageFor(this);
+        }
+        @Override
+        public byte[] getID() { return id; }
+
+        @Override
+        public Bitmap getImage() { return img; }
+        @Override
+        public void setImage(Bitmap newimg, boolean recycleOld) {
+            if (newimg == img) return;
+            if (recycleOld) img.recycle();
+            img = newimg;
+            redrawCustomControls(false);
+        }
     }
     private class CustomTextField implements ICustomControl {
         private int posx, posy, width, height;
@@ -500,7 +563,7 @@ public class MainActivity extends AppCompatActivity {
                     // send update notification to server
                     try {
                         byte[] t = text.getBytes("UTF-8");
-                        netsbloxSend(ByteBuffer.allocate(2 + id.length + t.length).put((byte)'t').put((byte)id.length).put(id).put(t).array(), netsbloxAddress);
+                        if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(2 + id.length + t.length).put((byte)'t').put((byte)id.length).put(id).put(t).array(), netsbloxAddress);
                     }
                     catch (Exception ignored) {}
                 });
@@ -647,7 +710,7 @@ public class MainActivity extends AppCompatActivity {
             state = !state;
             context.redrawCustomControls(false);
 
-            try { netsbloxSend(ByteBuffer.allocate(2 + id.length).put((byte)'z').put((byte)(state ? 1 : 0)).put(id).array(), netsbloxAddress); }
+            try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(2 + id.length).put((byte)'z').put((byte)(state ? 1 : 0)).put(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
         }
         @Override
@@ -717,7 +780,7 @@ public class MainActivity extends AppCompatActivity {
             }
             context.redrawCustomControls(false);
 
-            try { netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress); }
+            try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
         }
 
@@ -782,32 +845,64 @@ public class MainActivity extends AppCompatActivity {
         return false;
     }
 
+    private Bitmap getDefaultImage() {
+        Bitmap img = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(img);
+        canvas.drawRect(0, 0, 100, 100, new Paint(Color.BLACK));
+        return img;
+    }
+
     // ----------------------------------------------
 
     private Random rand = new Random();
-
-    private static final int SENSOR_DISPLAY_UPDATE_FREQUENCY = 1000;
 
     private static final int SERVER_PORT = 1975;
     private static final int UDP_PORT = 8888;
     private static final int TCP_PORT = 8889;
     private SocketAddress netsbloxAddress = null; // target for heartbeat comms - can be changed at will
     private DatagramSocket udpSocket = null; // our socket for udp comms - do not close or change it
-    private ServerSocket tcpSocket = null;   // our socket for tcp comms - do not close or change it
+    private final Socket tcpSocket = new Socket();   // our socket for tcp comms - do not close or change it
 
     private final String MAC_ADDR_PREF_NAME = "MAC_ADDR"; // name to use for mac addr in stored app preferences
     private byte[] macAddress = null;
 
+    private Thread reconnectThread = null;
     private Thread udpServerThread = null;
     private Thread tcpServerThread = null;
     private Thread pipeThread = null;
     private long next_heartbeat = 0;
 
+    private final String[] reconnectRequest = new String[] { null };
     private final List<DatagramPacket> pipeQueue = new ArrayList<>();
+
+    private byte[] readExact(InputStream input, int len) throws Exception {
+        byte[] res = new byte[len];
+        for (int current = 0; current < res.length; ) {
+            current += input.read(res, current, res.length - current);
+        }
+        return res;
+    }
 
     @FunctionalInterface
     private interface SensorConsumer {
         void apply(BasicSensor sensor) throws Exception;
+    }
+
+    // given a large bitmap, scales it down (maintaining aspect ratio) so that it is small enough to send over UDP
+    private Bitmap ScaleImageForUDP(Bitmap src) {
+        final int MAX_BYTES = 8 * 64 * 1024; // due to using jpeg compression, we can actually afford to be over the maximum packet size
+        int w = src.getWidth(), h = src.getHeight();
+        int rawBytes = 4 * w * h;
+        if (rawBytes <= MAX_BYTES) return src;
+        float mult = (float)Math.sqrt((double)MAX_BYTES / (double)rawBytes);
+        int w2 = (int)(w * mult), h2 = (int)(h * mult);
+
+        System.err.printf("resized image: %dx%d -> %dx%d (%d argb8 bytes)\n", w, h, w2, h2, 4 * w2 * h2);
+
+        Bitmap res = Bitmap.createBitmap(w2, h2, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(res);
+        canvas.drawBitmap(src, new Rect(0, 0, w, h), new Rect(0, 0, w2, h2), new Paint());
+        return res;
     }
 
     private void connectToServer() {
@@ -818,18 +913,79 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
         }
-        if (tcpSocket == null) {
-            try { tcpSocket = new ServerSocket(TCP_PORT); }
-            catch (Exception ex) {
-                Toast.makeText(this, String.format("Failed to open tcp port %d: %s", UDP_PORT, ex.toString()), Toast.LENGTH_SHORT).show();
-                return;
-            }
+
+        synchronized (reconnectRequest) {
+            EditText hostText = findViewById(R.id.serverHostText);
+            reconnectRequest[0] = hostText.getText().toString();
+            reconnectRequest.notify();
         }
 
-        EditText hostText = findViewById(R.id.serverHostText);
-        netsbloxAddress = new InetSocketAddress(hostText.getText().toString(), SERVER_PORT);
-        next_heartbeat = 0; // trigger a heartbeat on the next network thread wakeup
+        if (reconnectThread == null) {
+            reconnectThread = new Thread(() -> {
+                while (true) {
+                    try {
+                        String req;
+                        synchronized (reconnectRequest) {
+                            while (reconnectRequest[0] == null) reconnectRequest.wait();
+                            req = reconnectRequest[0];
+                            reconnectRequest[0] = null;
+                        }
 
+                        try {
+                            netsbloxAddress = new InetSocketAddress(req, SERVER_PORT);
+                            next_heartbeat = 0;
+                            System.err.printf("reconnected!! %s\n", netsbloxAddress);
+
+//                                synchronized (tcpSocket) {
+//                                    System.err.println("here 1");
+//                                    if (tcpSocket.isConnected()) tcpSocket.close();
+//                                    System.err.println("here 2");
+//                                    tcpSocket.connect(netsbloxAddress, 5000);
+//                                    System.err.println("here 3");
+//                                    tcpSocket.notify();
+//                                    System.err.println("here 4");
+//                                }
+                        }
+                        catch (Exception ex) { System.err.printf("req error: %s\n", ex); }
+                    }
+                    catch (Exception ex) { System.err.printf("reconnect thread exception: %s\n", ex); }
+                }
+            });
+            reconnectThread.start();
+        }
+//        if (tcpServerThread == null) {
+//            tcpServerThread = new Thread(() -> {
+//                while (true) {
+//                    try {
+//                        synchronized (tcpSocket) {
+//                            while (!tcpSocket.isConnected()) tcpSocket.wait();
+//                            InputStream input = tcpSocket.getInputStream();
+//                            OutputStream output = tcpSocket.getOutputStream();
+//
+//                            int len = intFromBEBytes(readExact(input, 4), 0);
+//                            byte[] content = readExact(input, len);
+//
+//                            if (len >= 9 && fromBEBytes(content, 1, 8) == getPassword()) {
+//                                switch (content[0]) {
+//                                    case 'D': {
+//                                        ByteArrayOutputStream temp = new ByteArrayOutputStream();
+//                                        imgSnapshot.compress(Bitmap.CompressFormat.JPEG, 90, temp); // netsblox has a max resolution anyway, so no need for 100% quality compression
+//                                        byte[] img = temp.toByteArray();
+//
+//                                        output.write(intToBEBytes(1 + img.length));
+//                                        output.write(new byte[] { content[0] });
+//                                        output.write(img);
+//                                    }
+//                                    break;
+//                                }
+//                            }
+//                        }
+//                    }
+//                    catch (Exception ex) { System.err.printf("tcp network error: %s\n", ex); }
+//                }
+//            });
+//            tcpServerThread.start();
+//        }
         if (udpServerThread == null) {
             udpServerThread = new Thread(() -> {
                 byte[] buf = new byte[64];
@@ -837,9 +993,10 @@ public class MainActivity extends AppCompatActivity {
                 while (true) {
                     try {
                         long now_time = System.currentTimeMillis();
-                        if (now_time >= next_heartbeat) {
+                        if (now_time >= next_heartbeat && netsbloxAddress != null) {
                             netsbloxSend(new byte[] { 'I' }, netsbloxAddress); // send heartbeat so server knows we're still there
                             next_heartbeat = now_time + 60 * 1000; // next heartbeat in 1 minute
+                            System.err.println("sent heartbeat");
                         }
 
                         // wait for a message - short duration is so we can see reconnections quickly
@@ -885,7 +1042,33 @@ public class MainActivity extends AppCompatActivity {
                                 netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
                                 break;
                             }
-                            case 'W': {
+                            case 'D': { // get image
+                                if (packet.getLength() < 9) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
+
+                                Bitmap img = null;
+                                for (ICustomControl control : customControls) {
+                                    if (control instanceof IImageLike) {
+                                        if (!Arrays.equals(control.getID(), id)) continue;
+                                        img = ((IImageLike)control).getImage();
+                                        break;
+                                    }
+                                }
+                                if (img == null) netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
+
+                                Bitmap scaled = ScaleImageForUDP(img);
+                                ByteArrayOutputStream temp = new ByteArrayOutputStream();
+                                temp.write(new byte[] {buf[0]});
+                                scaled.compress(Bitmap.CompressFormat.JPEG, 90, temp);
+
+                                byte[] content = temp.toByteArray();
+                                System.err.printf("image content size: %d\n", content.length);
+                                netsbloxSend(content, packet.getSocketAddress());
+
+                                if (scaled != img) scaled.recycle(); // if it was a new object, recycle it (no longer needed)
+                                break;
+                            }
+                            case 'W': { // get toggle state
                                 if (packet.getLength() < 9) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
 
@@ -907,7 +1090,7 @@ public class MainActivity extends AppCompatActivity {
                                 netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
                                 break;
                             }
-                            case 'c': {
+                            case 'c': { // remove specific custom control
                                 if (packet.getLength() < 9) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
                                 for (int i = 0; i < customControls.size(); ++i) {
@@ -956,6 +1139,31 @@ public class MainActivity extends AppCompatActivity {
                                 netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(button) ? 0 : 2) }, packet.getSocketAddress());
                                 break;
                             }
+                            case 'U': { // add custom button control
+                                if (packet.getLength() < 26) continue;
+                                if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
+                                    netsbloxSend(new byte[]{buf[0], 1}, packet.getSocketAddress()); // if we hit controls limit, don't add
+                                    continue;
+                                }
+
+                                float x = floatFromBEBytes(buf, 9);
+                                float y = floatFromBEBytes(buf, 13);
+                                float width = floatFromBEBytes(buf, 17);
+                                float height = floatFromBEBytes(buf, 21);
+                                byte[] id = Arrays.copyOfRange(buf, 25, packet.getLength());
+
+                                ImageView view = (ImageView)findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth();
+                                int viewHeight = view.getHeight();
+
+                                ICustomControl imgbox = new CustomImageBox(
+                                        (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
+                                        (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
+                                        id, getDefaultImage());
+
+                                netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(imgbox) ? 0 : 2) }, packet.getSocketAddress());
+                                break;
+                            }
                             case 'T': { // add custom button control
                                 if (packet.getLength() < 34) continue;
                                 if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
@@ -973,11 +1181,6 @@ public class MainActivity extends AppCompatActivity {
                                 if (packet.getLength() < 34 + idlen) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 34, 34 + idlen);
                                 String text = new String(buf, 34 + idlen, packet.getLength() - (34 + idlen), "UTF-8");
-
-                                if (id == null) {
-                                    netsbloxSend(new byte[]{buf[0], 2}, packet.getSocketAddress()); // if id already existed, don't make another
-                                    continue;
-                                }
 
                                 ImageView view = (ImageView)findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth();
@@ -1085,37 +1288,11 @@ public class MainActivity extends AppCompatActivity {
                     }
                     catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
                     catch (Exception ex) {
-                        System.err.printf("udp network thread exception: %s", ex);
+                        System.err.printf("udp network thread exception: (addr %s): %s\n", netsbloxAddress, ex);
                     }
                 }
             });
             udpServerThread.start();
-        }
-        if (tcpServerThread == null) {
-            tcpServerThread = new Thread(() -> {
-                byte[] buf = new byte[64];
-                while (true) {
-                    try (Socket client = tcpSocket.accept()) {
-                        int buflen = client.getInputStream().read(buf);
-
-                        // ignore anything that's invalid or fails to auth
-                        if (buflen != 9 || fromBEBytes(buf, 1, 8) != getPassword()) {
-                            continue;
-                        }
-
-                        switch (buf[0]) {
-                            case 'D':
-                                imgSnapshot.compress(Bitmap.CompressFormat.JPEG, 90, client.getOutputStream()); // netsblox has a max resolution anyway, so no need for 100% quality compression
-                                break;
-                        }
-                    }
-                    catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
-                    catch (Exception ex) {
-                        System.err.printf("tcp network thread exception: %s", ex);
-                    }
-                }
-            });
-            tcpServerThread.start();
         }
         if (pipeThread == null) {
             pipeThread = new Thread(() -> {
@@ -1213,6 +1390,7 @@ public class MainActivity extends AppCompatActivity {
         // --------------------------------------------------
 
         getNewPassword();
+        _rawPassword = 0; // for development purposes
 
         // --------------------------------------------------
 
@@ -1282,15 +1460,6 @@ public class MainActivity extends AppCompatActivity {
         Paint paint = new Paint();
         paint.setColor(Color.BLACK);
         canvas.drawRect(0, 0, defaultImg.getWidth(), defaultImg.getHeight(), paint);
-        imgSnapshot = defaultImg;
-
-        // if we have a camera (and permissions), set the snapshot as its display content, otherwise hide it entirely (useless on this device)
-        if (getApplicationContext().getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
-            && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
-        {
-            imgDisplay.setImageBitmap(imgSnapshot);
-        }
-        else imgDisplay.setVisibility(View.INVISIBLE);
 
         // --------------------------------------------------
 
@@ -1392,6 +1561,29 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private IImageLike cameraImageDest = null;
+    private void requestImageFor(IImageLike target) {
+        // only do this if we have a camera and we have the necessary permissions
+        if (getApplicationContext().getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+        {
+            cameraImageDest = target;
+            Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            if (intent.resolveActivity(getPackageManager()) != null) {
+                try {
+                    File file = createTempImageFile(".jpg");
+                    Uri fileUri = FileProvider.getUriForFile(this, "com.example.android.fileprovider", file);
+                    intent.putExtra(MediaStore.EXTRA_OUTPUT, fileUri);
+                    imageActivityUri = fileUri;
+                    imageActivityCorrectedPath = file.getAbsolutePath();
+                    startActivityForResult(intent, CAMERA_REQUEST_CODE);
+                }
+                catch (Exception ex) {
+                    Toast.makeText(this, String.format("Failed to take picture: %s", ex), Toast.LENGTH_LONG).show();
+                }
+            }
+        }
+    }
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -1399,9 +1591,10 @@ public class MainActivity extends AppCompatActivity {
         switch (requestCode) {
             case CAMERA_REQUEST_CODE: {
                 try {
-                    imgSnapshot = grabResultImage();
-                    ImageView view = (ImageView)findViewById(R.id.snapshotDisplay);
-                    view.setImageBitmap(imgSnapshot);
+                    Bitmap img = grabResultImage();
+                    if (cameraImageDest != null) {
+                        cameraImageDest.setImage(img, true);
+                    }
                 }
                 catch (Exception ex) {
                     Toast.makeText(this, String.format("failed to load image: %s", ex), Toast.LENGTH_LONG).show();
@@ -1418,20 +1611,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void cameraButtonClick(View view) {
-        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-        if (intent.resolveActivity(getPackageManager()) != null) {
-            try {
-                File file = createTempImageFile(".jpg");
-                Uri fileUri = FileProvider.getUriForFile(this, "com.example.android.fileprovider", file);
-                intent.putExtra(MediaStore.EXTRA_OUTPUT, fileUri);
-                imageActivityUri = fileUri;
-                imageActivityCorrectedPath = file.getAbsolutePath();
-                startActivityForResult(intent, CAMERA_REQUEST_CODE);
-            }
-            catch (Exception ex) {
-                Toast.makeText(this, String.format("Failed to take picture: %s", ex), Toast.LENGTH_LONG).show();
-            }
-        }
+
     }
     public void newPasswordButtonClick(View view) {
         new AlertDialog.Builder(this)
