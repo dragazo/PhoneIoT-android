@@ -8,6 +8,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
@@ -854,21 +855,18 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
-    private Random rand = new Random();
+    private final Random rand = new Random();
 
     private static final int SERVER_PORT = 1975;
     private static final int UDP_PORT = 8888;
-    private static final int TCP_PORT = 8889;
     private SocketAddress netsbloxAddress = null; // target for heartbeat comms - can be changed at will
     private DatagramSocket udpSocket = null; // our socket for udp comms - do not close or change it
-    private final Socket tcpSocket = new Socket();   // our socket for tcp comms - do not close or change it
 
     private final String MAC_ADDR_PREF_NAME = "MAC_ADDR"; // name to use for mac addr in stored app preferences
     private byte[] macAddress = null;
 
     private Thread reconnectThread = null;
     private Thread udpServerThread = null;
-    private Thread tcpServerThread = null;
     private Thread pipeThread = null;
     private long next_heartbeat = 0;
 
@@ -886,23 +884,6 @@ public class MainActivity extends AppCompatActivity {
     @FunctionalInterface
     private interface SensorConsumer {
         void apply(BasicSensor sensor) throws Exception;
-    }
-
-    // given a large bitmap, scales it down (maintaining aspect ratio) so that it is small enough to send over UDP
-    private Bitmap ScaleImageForUDP(Bitmap src) {
-        final int MAX_BYTES = 8 * 64 * 1024; // due to using jpeg compression, we can actually afford to be over the maximum packet size
-        int w = src.getWidth(), h = src.getHeight();
-        int rawBytes = 4 * w * h;
-        if (rawBytes <= MAX_BYTES) return src;
-        float mult = (float)Math.sqrt((double)MAX_BYTES / (double)rawBytes);
-        int w2 = (int)(w * mult), h2 = (int)(h * mult);
-
-        System.err.printf("resized image: %dx%d -> %dx%d (%d argb8 bytes)\n", w, h, w2, h2, 4 * w2 * h2);
-
-        Bitmap res = Bitmap.createBitmap(w2, h2, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(res);
-        canvas.drawBitmap(src, new Rect(0, 0, w, h), new Rect(0, 0, w2, h2), new Paint());
-        return res;
     }
 
     private void connectToServer() {
@@ -935,16 +916,6 @@ public class MainActivity extends AppCompatActivity {
                             netsbloxAddress = new InetSocketAddress(req, SERVER_PORT);
                             next_heartbeat = 0;
                             System.err.printf("reconnected!! %s\n", netsbloxAddress);
-
-//                                synchronized (tcpSocket) {
-//                                    System.err.println("here 1");
-//                                    if (tcpSocket.isConnected()) tcpSocket.close();
-//                                    System.err.println("here 2");
-//                                    tcpSocket.connect(netsbloxAddress, 5000);
-//                                    System.err.println("here 3");
-//                                    tcpSocket.notify();
-//                                    System.err.println("here 4");
-//                                }
                         }
                         catch (Exception ex) { System.err.printf("req error: %s\n", ex); }
                     }
@@ -953,42 +924,9 @@ public class MainActivity extends AppCompatActivity {
             });
             reconnectThread.start();
         }
-//        if (tcpServerThread == null) {
-//            tcpServerThread = new Thread(() -> {
-//                while (true) {
-//                    try {
-//                        synchronized (tcpSocket) {
-//                            while (!tcpSocket.isConnected()) tcpSocket.wait();
-//                            InputStream input = tcpSocket.getInputStream();
-//                            OutputStream output = tcpSocket.getOutputStream();
-//
-//                            int len = intFromBEBytes(readExact(input, 4), 0);
-//                            byte[] content = readExact(input, len);
-//
-//                            if (len >= 9 && fromBEBytes(content, 1, 8) == getPassword()) {
-//                                switch (content[0]) {
-//                                    case 'D': {
-//                                        ByteArrayOutputStream temp = new ByteArrayOutputStream();
-//                                        imgSnapshot.compress(Bitmap.CompressFormat.JPEG, 90, temp); // netsblox has a max resolution anyway, so no need for 100% quality compression
-//                                        byte[] img = temp.toByteArray();
-//
-//                                        output.write(intToBEBytes(1 + img.length));
-//                                        output.write(new byte[] { content[0] });
-//                                        output.write(img);
-//                                    }
-//                                    break;
-//                                }
-//                            }
-//                        }
-//                    }
-//                    catch (Exception ex) { System.err.printf("tcp network error: %s\n", ex); }
-//                }
-//            });
-//            tcpServerThread.start();
-//        }
         if (udpServerThread == null) {
             udpServerThread = new Thread(() -> {
-                byte[] buf = new byte[64];
+                byte[] buf = new byte[64 * 1024];
                 DatagramPacket packet = new DatagramPacket(buf, 0, buf.length);
                 while (true) {
                     try {
@@ -1042,7 +980,7 @@ public class MainActivity extends AppCompatActivity {
                                 netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
                                 break;
                             }
-                            case 'D': { // get image
+                            case 'u': { // get image
                                 if (packet.getLength() < 9) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
 
@@ -1055,17 +993,30 @@ public class MainActivity extends AppCompatActivity {
                                     }
                                 }
                                 if (img == null) netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
+                                else netsbloxSend(new byte[] { buf[0] }, img, packet.getSocketAddress());
+                                break;
+                            }
+                            case 'i': {
+                                if (packet.getLength() < 10) continue;
+                                int idlen = (int)buf[9] & 0xff;
+                                if (packet.getLength() < 10 + idlen) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 10, 10 + idlen); // image content is everything after this block
 
-                                Bitmap scaled = ScaleImageForUDP(img);
-                                ByteArrayOutputStream temp = new ByteArrayOutputStream();
-                                temp.write(new byte[] {buf[0]});
-                                scaled.compress(Bitmap.CompressFormat.JPEG, 90, temp);
-
-                                byte[] content = temp.toByteArray();
-                                System.err.printf("image content size: %d\n", content.length);
-                                netsbloxSend(content, packet.getSocketAddress());
-
-                                if (scaled != img) scaled.recycle(); // if it was a new object, recycle it (no longer needed)
+                                IImageLike target = null;
+                                for (ICustomControl control : customControls) {
+                                    if (control instanceof IImageLike) {
+                                        if (!Arrays.equals(control.getID(), id)) continue;
+                                        target = (IImageLike)control;
+                                        break;
+                                    }
+                                }
+                                if (target == null) netsbloxSend(new byte[]{ buf[0], 1 }, packet.getSocketAddress());
+                                else {
+                                    Bitmap img = BitmapFactory.decodeByteArray(buf, 10 + idlen, packet.getLength() - (10 + idlen));
+                                    System.err.printf("decoded image: %dx%d\n", img.getWidth(), img.getHeight());
+                                    target.setImage(img, true);
+                                    netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                }
                                 break;
                             }
                             case 'W': { // get toggle state
@@ -1139,7 +1090,7 @@ public class MainActivity extends AppCompatActivity {
                                 netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(button) ? 0 : 2) }, packet.getSocketAddress());
                                 break;
                             }
-                            case 'U': { // add custom button control
+                            case 'U': { // add custom image display
                                 if (packet.getLength() < 26) continue;
                                 if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
                                     netsbloxSend(new byte[]{buf[0], 1}, packet.getSocketAddress()); // if we hit controls limit, don't add
@@ -1312,7 +1263,7 @@ public class MainActivity extends AppCompatActivity {
             pipeThread.start();
         }
     }
-    private void netsbloxSend(byte[] content, SocketAddress dest) throws Exception {
+    private void netsbloxSend(byte[] content, SocketAddress dest) {
         if (udpSocket != null) {
             byte[] expanded = new byte[content.length + 10];
             for (int i = 0; i < 6; ++i) expanded[i] = macAddress[i];
@@ -1324,6 +1275,35 @@ public class MainActivity extends AppCompatActivity {
                 pipeQueue.notify();
             }
         }
+    }
+    private void netsbloxSend(byte[] prefix, Bitmap img, SocketAddress dest) throws IOException {
+        Bitmap scaled = ScaleImageForUDP(img);
+        ByteArrayOutputStream temp = new ByteArrayOutputStream();
+        temp.write(prefix);
+        scaled.compress(Bitmap.CompressFormat.JPEG, 90, temp);
+
+        byte[] content = temp.toByteArray();
+        System.err.printf("image content size: %d\n", content.length);
+        netsbloxSend(content, dest);
+
+        if (scaled != img) scaled.recycle(); // if it was a new object, recycle it (no longer needed)
+    }
+
+    // given a large bitmap, scales it down (maintaining aspect ratio) so that it is small enough to send over UDP
+    private Bitmap ScaleImageForUDP(Bitmap src) {
+        final int MAX_BYTES = 8 * 64 * 1024; // due to using jpeg compression, we can actually afford to be over the maximum packet size
+        int w = src.getWidth(), h = src.getHeight();
+        int rawBytes = 4 * w * h;
+        if (rawBytes <= MAX_BYTES) return src;
+        float mult = (float)Math.sqrt((double)MAX_BYTES / (double)rawBytes);
+        int w2 = (int)(w * mult), h2 = (int)(h * mult);
+
+        System.err.printf("resized image: %dx%d -> %dx%d (%d argb8 bytes)\n", w, h, w2, h2, 4 * w2 * h2);
+
+        Bitmap res = Bitmap.createBitmap(w2, h2, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(res);
+        canvas.drawBitmap(src, new Rect(0, 0, w, h), new Rect(0, 0, w2, h2), new Paint());
+        return res;
     }
 
     @Override
