@@ -358,10 +358,10 @@ public class MainActivity extends AppCompatActivity {
         void handleClick(MainActivity context);
         byte[] getID();
     }
-    private interface IToggleable {
+    private interface IToggleable extends ICustomControl {
         boolean getToggleState();
     }
-    private interface IImageLike {
+    private interface IImageLike extends ICustomControl {
         Bitmap getImage();
         void setImage(Bitmap newimg, boolean recycleOld);
     }
@@ -1391,6 +1391,8 @@ public class MainActivity extends AppCompatActivity {
                     Bitmap img = grabResultImage();
                     if (cameraImageDest != null) {
                         cameraImageDest.setImage(img, true);
+                        byte[] id = cameraImageDest.getID();
+                        if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress);
                     }
                 }
                 catch (Exception ex) {
