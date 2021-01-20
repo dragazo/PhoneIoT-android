@@ -19,25 +19,20 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
-import android.icu.util.Output;
 import android.location.Location;
 import android.location.LocationListener;
-import android.location.LocationManager;
 import android.media.ExifInterface;
 import android.media.MediaRecorder;
-import android.media.audiofx.AudioEffect;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.PersistableBundle;
 import android.preference.PreferenceManager;
 import android.provider.MediaStore;
 import android.text.StaticLayout;
 import android.text.TextPaint;
-import android.text.TextUtils;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.EditText;
@@ -45,7 +40,6 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.annotation.ColorRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
@@ -65,15 +59,9 @@ import com.google.android.gms.tasks.Task;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.UnsupportedEncodingException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
 import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
@@ -83,7 +71,6 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Random;
-import java.util.function.Consumer;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -126,7 +113,7 @@ public class MainActivity extends AppCompatActivity {
 
     // ------------------------------------
 
-    private class SensorInfo implements SensorEventListener, BasicSensor {
+    private static class SensorInfo implements SensorEventListener, BasicSensor {
         public Sensor sensor;
         public float[] data;
         public boolean supported;
@@ -186,14 +173,14 @@ public class MainActivity extends AppCompatActivity {
     // ----------------------------------------------
 
     // the hardware orientation sensor has been deprecated for a while, so we simulate it with the accelerometer and magnetometer
-    private class OrientationCalculator implements BasicSensor {
-        public float[] data = new float[3];
+    private static class OrientationCalculator implements BasicSensor {
+        public final float[] data = new float[3];
         public boolean supported = false;
 
-        private float[] matrixBuffer = new float[9];
+        private final float[] matrixBuffer = new float[9];
 
-        private SensorInfo accel;
-        private SensorInfo magnet;
+        private final SensorInfo accel;
+        private final SensorInfo magnet;
 
         public OrientationCalculator(SensorInfo accelerometerSource, SensorInfo magnetometerSource) {
             accel = accelerometerSource;
@@ -217,17 +204,13 @@ public class MainActivity extends AppCompatActivity {
     // ----------------------------------------------
 
     private class LocationSensor implements LocationListener, BasicSensor {
-        public float[] data = new float[2];
+        public final float[] data = new float[2];
         public int updateCount = 0;
         public boolean supported = false;
 
-        private FusedLocationProviderClient fusedLocationProviderClient;
-        private LocationRequest locationRequest;
-
-        private LocationSettingsRequest request;
-        private SettingsClient client;
-        private LocationCallback locationCallback;
-        private Task<LocationSettingsResponse> locationSettingsResponseTask;
+        private final FusedLocationProviderClient fusedLocationProviderClient;
+        private final LocationRequest locationRequest;
+        private final LocationCallback locationCallback;
 
         public LocationSensor(Context context) {
             fusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(context);
@@ -236,8 +219,8 @@ public class MainActivity extends AppCompatActivity {
             locationRequest.setFastestInterval(1000); // we also accept updates from other sources, but at most once per second (could be very fast)
             locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
 
-            request = new LocationSettingsRequest.Builder().addLocationRequest(locationRequest).build();
-            client = LocationServices.getSettingsClient(context);
+            LocationSettingsRequest request = new LocationSettingsRequest.Builder().addLocationRequest(locationRequest).build();
+            SettingsClient client = LocationServices.getSettingsClient(context);
             locationCallback = new LocationCallback() {
                 @Override
                 public void onLocationResult(LocationResult locationResult) {
@@ -249,7 +232,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
             };
-            locationSettingsResponseTask = client.checkLocationSettings(request);
+            Task<LocationSettingsResponse> locationSettingsResponseTask = client.checkLocationSettings(request);
             locationSettingsResponseTask.addOnSuccessListener(resp -> {
                 boolean coarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
                 boolean fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
@@ -262,13 +245,6 @@ public class MainActivity extends AppCompatActivity {
         }
         public void stop() {
             fusedLocationProviderClient.removeLocationUpdates(locationCallback);
-        }
-        public void appendData(StringBuilder b) {
-            if (supported) {
-                appendVector(b, data);
-                b.append(String.format(" [%d]", updateCount));
-            }
-            else b.append(NOT_SUPPORTED_STRING);
         }
 
         @Override
@@ -292,8 +268,8 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
-    private class SoundSensor implements BasicSensor {
-        private float[] data = new float[1];
+    private static class SoundSensor implements BasicSensor {
+        private final float[] data = new float[1];
         private boolean supported = false;
 
         private static final long SAMPLE_RATE = 250; // ms
@@ -316,18 +292,14 @@ public class MainActivity extends AppCompatActivity {
                 new Runnable() {
                     @Override
                     public void run() {
-                        try {
-                            data[0] = (float)recorder.getMaxAmplitude() / NORMALIZATION_FACTOR;
-                        }
+                        try { data[0] = (float)recorder.getMaxAmplitude() / NORMALIZATION_FACTOR; }
                         catch (Exception ignore) { }
                         handler.postDelayed(this, SAMPLE_RATE);
                     }
                 }.run();
             }
             catch (Exception ignore) {
-                if (recorder != null) {
-                    recorder.release();
-                }
+                if (recorder != null) recorder.release();
                 supported = false;
             }
         }
@@ -349,20 +321,21 @@ public class MainActivity extends AppCompatActivity {
     private long _rawPassword = 0;
     private long _passwordExpiry = 0;
 
-    public long getPassword() {
+    private long getPassword() {
         long nowtime = System.currentTimeMillis();
         if (nowtime < _passwordExpiry) return _rawPassword;
-        _rawPassword = rand.nextLong() & Long.MAX_VALUE; // password is a 63-bit (positive) value
-        _passwordExpiry = nowtime + PASSWORD_EXPIRY_INTERVAL;
-
-        TextView text = (TextView)findViewById(R.id.authText);
-        text.setText(String.format("password: %016x", _rawPassword));
-
+        setPassword(rand.nextLong() & Long.MAX_VALUE); // password is a 63-bit (positive) value
         return _rawPassword;
     }
-    public long getNewPassword() {
+    private void setPassword(long pass) {
+        _rawPassword = pass;
+        _passwordExpiry = System.currentTimeMillis() + PASSWORD_EXPIRY_INTERVAL;
+        TextView text = findViewById(R.id.authText);
+        text.setText(String.format("password: %016x", _rawPassword));
+    }
+    private void invalidatePassword() {
         _passwordExpiry = 0;
-        return getPassword();
+        getPassword();
     }
 
     // ----------------------------------------------
@@ -375,18 +348,7 @@ public class MainActivity extends AppCompatActivity {
     private static int intFromBEBytes(byte[] v, int start) {
         return (int)fromBEBytes(v, start, 4);
     }
-    private static float floatFromBEBytes(byte[] v, int start) {
-        return Float.intBitsToFloat(intFromBEBytes(v, start));
-    }
-
-    private static byte[] intToBEBytes(int val) {
-        return new byte[]{
-                (byte)(val >> 24),
-                (byte)(val >> 16),
-                (byte)(val >> 8),
-                (byte)val,
-        };
-    }
+    private static float floatFromBEBytes(byte[] v, int start) { return Float.intBitsToFloat(intFromBEBytes(v, start)); }
 
     // ----------------------------------------------
 
@@ -407,7 +369,7 @@ public class MainActivity extends AppCompatActivity {
     private class CustomButton implements ICustomControl {
         private int posx, posy, width, height;
         private int color, textColor;
-        private byte[] id;
+        private final byte[] id;
         private String text;
 
         public CustomButton(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text) {
@@ -448,7 +410,7 @@ public class MainActivity extends AppCompatActivity {
     }
     private class CustomImageBox implements ICustomControl, IImageLike {
         private int posx, posy, width, height;
-        private byte[] id;
+        private final byte[] id;
         private Bitmap img;
 
         public CustomImageBox(int posx, int posy, int width, int height, byte[] id, Bitmap img) {
@@ -463,15 +425,20 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void draw(Canvas canvas, Paint paint) {
             paint.setColor(Color.BLACK);
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawRect(posx, posy, posx + width, posy + height, paint);
+
+            float srcw = (float)img.getWidth(), srch = (float)img.getHeight();
+            float mult = Math.min((float)width / srcw, (float)height / srch);
+            float destw = srcw * mult, desth = srch * mult;
+            float destx = posx + ((float)width - destw) / 2, desty = posy + ((float)height - desth) / 2;
+            Rect src = new Rect(0, 0, img.getWidth(), img.getHeight());
+            Rect dest = new Rect((int)destx, (int)desty, (int)(destx + destw), (int)(desty + desth));
+            canvas.drawBitmap(img, src, dest, paint);
+
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(2f);
             canvas.drawRect(posx, posy, posx + width, posy + height, paint);
-
-            float w = (float)img.getWidth(), h = (float)img.getHeight();
-            float mult = Math.min((float)width / w, (float)height / h);
-            Rect src = new Rect(0, 0, (int)w, (int)h);
-            Rect dest = new Rect(posx, posy, posx + (int)(w * mult), posy + (int)(h * mult));
-            canvas.drawBitmap(img, src, dest, paint);
         }
 
         @Override
@@ -498,7 +465,7 @@ public class MainActivity extends AppCompatActivity {
     private class CustomTextField implements ICustomControl {
         private int posx, posy, width, height;
         private int color, textColor;
-        private byte[] id;
+        private final byte[] id;
         private String text;
 
         private static final int PADDING = 10;
@@ -537,9 +504,7 @@ public class MainActivity extends AppCompatActivity {
                 layout.draw(canvas);
                 canvas.restore();
             }
-            else {
-                canvas.drawText(text, posx + (float)width / 2, posy + ((float)height + textBounds.height() - 4) / 2, paint);
-            }
+            else canvas.drawText(text, posx + (float)width / 2, posy + ((float)height + textBounds.height() - 4) / 2, paint);
         }
 
         @Override
@@ -580,7 +545,7 @@ public class MainActivity extends AppCompatActivity {
     private class CustomLabel implements ICustomControl {
         private int posx, posy;
         private int textColor;
-        private byte[] id;
+        private final byte[] id;
         private String text;
 
         public CustomLabel(int posx, int posy, int textColor, byte[] id, String text) {
@@ -617,7 +582,7 @@ public class MainActivity extends AppCompatActivity {
         private int posx, posy;
         private int checkColor, textColor;
         private boolean state;
-        private byte[] id;
+        private final byte[] id;
         private String text;
         private CheckboxStyle style;
 
@@ -724,7 +689,8 @@ public class MainActivity extends AppCompatActivity {
         private int posx, posy;
         private int checkColor, textColor;
         private boolean state;
-        byte[] id, group;
+        private final byte[] id;
+        private byte[] group;
         private String text;
 
         private static final int RADIO_WIDTH = 35;
@@ -795,10 +761,10 @@ public class MainActivity extends AppCompatActivity {
     private static final int MAX_CUSTOM_CONTROLS = 128;
 
     private boolean controlPanelInitialized = false;
-    private List<ICustomControl> customControls = new ArrayList<>();
+    private final List<ICustomControl> customControls = new ArrayList<>();
     private boolean redrawCustomControls(boolean optional) {
         if (optional && controlPanelInitialized) return true;
-        ImageView view = (ImageView)findViewById(R.id.controlPanel);
+        ImageView view = findViewById(R.id.controlPanel);
         int width = view.getWidth();
         int height = view.getHeight();
         if (width <= 0 || height <= 0) return false;
@@ -820,14 +786,21 @@ public class MainActivity extends AppCompatActivity {
         controlPanelInitialized = true;
         return true;
     }
-    private boolean tryAddCustomControl(ICustomControl control) {
+    private ICustomControl getCustomControlWithIDWhere(byte[] id, Predicate<ICustomControl> predicate) {
+        for (ICustomControl control : customControls) {
+            if (predicate.test(control) && Arrays.equals(control.getID(), id)) return control;
+        }
+        return null;
+    }
+    private byte tryAddCustomControl(ICustomControl control) {
+        if (customControls.size() >= MAX_CUSTOM_CONTROLS) return 1;
         byte[] id = control.getID();
         for (ICustomControl other : customControls) {
-            if (Arrays.equals(id, other.getID())) return false;
+            if (Arrays.equals(id, other.getID())) return 2;
         }
         customControls.add(control);
         redrawCustomControls(false);
-        return true;
+        return 0;
     }
     private boolean handleCustomControlOnTouch(View view, MotionEvent e) {
         List<ICustomControl> controls = customControls;
@@ -857,33 +830,28 @@ public class MainActivity extends AppCompatActivity {
 
     private final Random rand = new Random();
 
-    private static final int SERVER_PORT = 1975;
+    private static final int SERVER_PORT = 1976;
     private static final int UDP_PORT = 8888;
     private SocketAddress netsbloxAddress = null; // target for heartbeat comms - can be changed at will
     private DatagramSocket udpSocket = null; // our socket for udp comms - do not close or change it
 
-    private final String MAC_ADDR_PREF_NAME = "MAC_ADDR"; // name to use for mac addr in stored app preferences
+    private static final String MAC_ADDR_PREF_NAME = "MAC_ADDR"; // name to use for mac addr in stored app preferences
     private byte[] macAddress = null;
 
-    private Thread reconnectThread = null;
     private Thread udpServerThread = null;
     private Thread pipeThread = null;
     private long next_heartbeat = 0;
 
-    private final String[] reconnectRequest = new String[] { null };
+    private String reconnectRequest = null;
     private final List<DatagramPacket> pipeQueue = new ArrayList<>();
-
-    private byte[] readExact(InputStream input, int len) throws Exception {
-        byte[] res = new byte[len];
-        for (int current = 0; current < res.length; ) {
-            current += input.read(res, current, res.length - current);
-        }
-        return res;
-    }
 
     @FunctionalInterface
     private interface SensorConsumer {
         void apply(BasicSensor sensor) throws Exception;
+    }
+    @FunctionalInterface
+    private interface Predicate<T> {
+        boolean test(T t);
     }
 
     private void connectToServer() {
@@ -895,60 +863,41 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        synchronized (reconnectRequest) {
-            EditText hostText = findViewById(R.id.serverHostText);
-            reconnectRequest[0] = hostText.getText().toString();
-            reconnectRequest.notify();
-        }
+        reconnectRequest = ((EditText)findViewById(R.id.serverHostText)).getText().toString();
 
-        if (reconnectThread == null) {
-            reconnectThread = new Thread(() -> {
-                while (true) {
-                    try {
-                        String req;
-                        synchronized (reconnectRequest) {
-                            while (reconnectRequest[0] == null) reconnectRequest.wait();
-                            req = reconnectRequest[0];
-                            reconnectRequest[0] = null;
-                        }
-
-                        try {
-                            netsbloxAddress = new InetSocketAddress(req, SERVER_PORT);
-                            next_heartbeat = 0;
-                            System.err.printf("reconnected!! %s\n", netsbloxAddress);
-                        }
-                        catch (Exception ex) { System.err.printf("req error: %s\n", ex); }
-                    }
-                    catch (Exception ex) { System.err.printf("reconnect thread exception: %s\n", ex); }
-                }
-            });
-            reconnectThread.start();
-        }
         if (udpServerThread == null) {
             udpServerThread = new Thread(() -> {
-                byte[] buf = new byte[64 * 1024];
+                byte[] buf = new byte[64 * 1024]; // must be big enough to hold any UDP datagram
                 DatagramPacket packet = new DatagramPacket(buf, 0, buf.length);
                 while (true) {
                     try {
+                        String recon = reconnectRequest;
+                        reconnectRequest = null;
+                        if (recon != null) {
+                            try {
+                                netsbloxAddress = new InetSocketAddress(recon, SERVER_PORT);
+                                next_heartbeat = 0;
+                                System.err.printf("reconnected to target: %s\n", netsbloxAddress);
+                            }
+                            catch (Exception ex) { System.err.printf("reconnect failure: %s\n", ex); }
+                        }
+
                         long now_time = System.currentTimeMillis();
                         if (now_time >= next_heartbeat && netsbloxAddress != null) {
                             netsbloxSend(new byte[] { 'I' }, netsbloxAddress); // send heartbeat so server knows we're still there
-                            next_heartbeat = now_time + 60 * 1000; // next heartbeat in 1 minute
+                            next_heartbeat = now_time + 30 * 1000; // next heartbeat in 30 seconds
                             System.err.println("sent heartbeat");
                         }
 
                         // wait for a message - short duration is so we can see reconnections quickly
-                        udpSocket.setSoTimeout(1 * 1000);
+                        udpSocket.setSoTimeout(1000);
                         udpSocket.receive(packet);
 
                         // ignore anything that's invalid or fails to auth
-                        if (packet.getLength() < 9 || fromBEBytes(buf, 1, 8) != getPassword()) {
-                            continue;
-                        }
+                        if (packet.getLength() < 9 || fromBEBytes(buf, 1, 8) != getPassword()) continue;
 
-                        SensorConsumer handleSensor = src -> {
-                            if (packet.getLength() != 9) return;
-
+                        final SensorConsumer handleSensor = src -> {
+                            if (packet.getLength() != 9) return; // ignore invalid format
                             if (src.isSupported()) { // if the sensor is supported, send back all the content
                                 src.calculate(); // compute software-emulated logic (if any)
                                 float[] v = src.getData();
@@ -983,33 +932,17 @@ public class MainActivity extends AppCompatActivity {
                             case 'u': { // get image
                                 if (packet.getLength() < 9) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
-
-                                Bitmap img = null;
-                                for (ICustomControl control : customControls) {
-                                    if (control instanceof IImageLike) {
-                                        if (!Arrays.equals(control.getID(), id)) continue;
-                                        img = ((IImageLike)control).getImage();
-                                        break;
-                                    }
-                                }
-                                if (img == null) netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
-                                else netsbloxSend(new byte[] { buf[0] }, img, packet.getSocketAddress());
+                                IImageLike target = (IImageLike)getCustomControlWithIDWhere(id, c -> c instanceof IImageLike);
+                                if (target == null) netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
+                                else netsbloxSend(new byte[] { buf[0] }, target.getImage(), packet.getSocketAddress());
                                 break;
                             }
-                            case 'i': {
+                            case 'i': { // set image
                                 if (packet.getLength() < 10) continue;
                                 int idlen = (int)buf[9] & 0xff;
                                 if (packet.getLength() < 10 + idlen) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 10, 10 + idlen); // image content is everything after this block
-
-                                IImageLike target = null;
-                                for (ICustomControl control : customControls) {
-                                    if (control instanceof IImageLike) {
-                                        if (!Arrays.equals(control.getID(), id)) continue;
-                                        target = (IImageLike)control;
-                                        break;
-                                    }
-                                }
+                                IImageLike target = (IImageLike)getCustomControlWithIDWhere(id, c -> c instanceof IImageLike);
                                 if (target == null) netsbloxSend(new byte[]{ buf[0], 1 }, packet.getSocketAddress());
                                 else {
                                     Bitmap img = BitmapFactory.decodeByteArray(buf, 10 + idlen, packet.getLength() - (10 + idlen));
@@ -1022,17 +955,8 @@ public class MainActivity extends AppCompatActivity {
                             case 'W': { // get toggle state
                                 if (packet.getLength() < 9) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
-
-                                byte res = 2; // default return value is 2 (id not found)
-                                for (ICustomControl control : customControls) {
-                                    if (control instanceof IToggleable) {
-                                        if (!Arrays.equals(control.getID(), id)) continue;
-                                        res = (byte)(((IToggleable)control).getToggleState() ? 1 : 0);
-                                        break;
-                                    }
-                                }
-
-                                netsbloxSend(new byte[] { buf[0], res }, packet.getSocketAddress());
+                                IToggleable target = (IToggleable)getCustomControlWithIDWhere(id, c -> c instanceof IToggleable);
+                                netsbloxSend(new byte[] { buf[0], (byte)(target == null ? 2 : target.getToggleState() ? 1 : 0) }, packet.getSocketAddress());
                             }
                             case 'C': { // clear custom controls
                                 if (packet.getLength() != 9) continue;
@@ -1057,11 +981,6 @@ public class MainActivity extends AppCompatActivity {
                             }
                             case 'B': { // add custom button control
                                 if (packet.getLength() < 34) continue;
-                                if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
-                                    netsbloxSend(new byte[]{buf[0], 1}, packet.getSocketAddress()); // if we hit controls limit, don't add
-                                    continue;
-                                }
-
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 float width = floatFromBEBytes(buf, 17);
@@ -1073,55 +992,34 @@ public class MainActivity extends AppCompatActivity {
                                 byte[] id = Arrays.copyOfRange(buf, 34, 34 + idlen);
                                 String text = new String(buf, 34 + idlen, packet.getLength() - (34 + idlen), "UTF-8");
 
-                                if (id == null) {
-                                    netsbloxSend(new byte[]{buf[0], 2}, packet.getSocketAddress()); // if id already existed, don't make another
-                                    continue;
-                                }
-
-                                ImageView view = (ImageView)findViewById(R.id.controlPanel);
-                                int viewWidth = view.getWidth();
-                                int viewHeight = view.getHeight();
-
-                                ICustomControl button = new CustomButton(
+                                ImageView view = findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth(), viewHeight = view.getHeight();
+                                ICustomControl control = new CustomButton(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
                                         color, textColor, id, text);
-
-                                netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(button) ? 0 : 2) }, packet.getSocketAddress());
+                                netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
                             case 'U': { // add custom image display
                                 if (packet.getLength() < 26) continue;
-                                if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
-                                    netsbloxSend(new byte[]{buf[0], 1}, packet.getSocketAddress()); // if we hit controls limit, don't add
-                                    continue;
-                                }
-
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 float width = floatFromBEBytes(buf, 17);
                                 float height = floatFromBEBytes(buf, 21);
                                 byte[] id = Arrays.copyOfRange(buf, 25, packet.getLength());
 
-                                ImageView view = (ImageView)findViewById(R.id.controlPanel);
-                                int viewWidth = view.getWidth();
-                                int viewHeight = view.getHeight();
-
-                                ICustomControl imgbox = new CustomImageBox(
+                                ImageView view = findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth(), viewHeight = view.getHeight();
+                                ICustomControl control = new CustomImageBox(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
                                         id, getDefaultImage());
-
-                                netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(imgbox) ? 0 : 2) }, packet.getSocketAddress());
+                                netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
                             case 'T': { // add custom button control
                                 if (packet.getLength() < 34) continue;
-                                if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
-                                    netsbloxSend(new byte[]{buf[0], 1}, packet.getSocketAddress()); // if we hit controls limit, don't add
-                                    continue;
-                                }
-
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 float width = floatFromBEBytes(buf, 17);
@@ -1133,25 +1031,17 @@ public class MainActivity extends AppCompatActivity {
                                 byte[] id = Arrays.copyOfRange(buf, 34, 34 + idlen);
                                 String text = new String(buf, 34 + idlen, packet.getLength() - (34 + idlen), "UTF-8");
 
-                                ImageView view = (ImageView)findViewById(R.id.controlPanel);
-                                int viewWidth = view.getWidth();
-                                int viewHeight = view.getHeight();
-
-                                ICustomControl button = new CustomTextField(
+                                ImageView view = findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth(), viewHeight = view.getHeight();
+                                ICustomControl control = new CustomTextField(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
                                         color, textColor, id, text);
-
-                                netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(button) ? 0 : 2) }, packet.getSocketAddress());
+                                netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
                             case 'g': { // add custom label control
                                 if (packet.getLength() < 22) continue;
-                                if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
-                                    netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
-                                    continue;
-                                }
-
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 int textColor = intFromBEBytes(buf, 17);
@@ -1160,24 +1050,16 @@ public class MainActivity extends AppCompatActivity {
                                 byte[] id = Arrays.copyOfRange(buf, 22, 22 + idlen);
                                 String text = new String(buf, 22 + idlen, packet.getLength() - (22 + idlen), "UTF-8");
 
-                                ImageView view = (ImageView)findViewById(R.id.controlPanel);
-                                int viewWidth = view.getWidth();
-                                int viewHeight = view.getHeight();
-
-                                ICustomControl label = new CustomLabel(
+                                ImageView view = findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth(), viewHeight = view.getHeight();
+                                ICustomControl control = new CustomLabel(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         textColor, id, text);
-
-                                netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(label) ? 0 : 2) }, packet.getSocketAddress());
+                                netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
                             case 'Z': { // add custom checkbox control
                                 if (packet.getLength() < 28) continue;
-                                if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
-                                    netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
-                                    continue;
-                                }
-
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 int checkColor = intFromBEBytes(buf, 17);
@@ -1193,24 +1075,16 @@ public class MainActivity extends AppCompatActivity {
                                 byte[] id = Arrays.copyOfRange(buf, 28, 28 + idlen);
                                 String text = new String(buf, 28 + idlen, packet.getLength() - (28 + idlen), "UTF-8");
 
-                                ImageView view = (ImageView)findViewById(R.id.controlPanel);
-                                int viewWidth = view.getWidth();
-                                int viewHeight = view.getHeight();
-
-                                ICustomControl checkbox = new CustomCheckbox(
+                                ImageView view = findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth(), viewHeight = view.getHeight();
+                                ICustomControl control = new CustomCheckbox(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         checkColor, textColor, state, id, text, style);
-
-                                netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(checkbox) ? 0 : 2) }, packet.getSocketAddress());
+                                netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
                             case 'y': { // add custom radiobutton control
                                 if (packet.getLength() < 27) continue;
-                                if (customControls.size() >= MAX_CUSTOM_CONTROLS) {
-                                    netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress()); // if we hit controls limit, don't add
-                                    continue;
-                                }
-
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 int checkColor = intFromBEBytes(buf, 17);
@@ -1224,15 +1098,12 @@ public class MainActivity extends AppCompatActivity {
                                 byte[] group = Arrays.copyOfRange(buf, 27 + idlen + 1, 27 + idlen + 1 + grouplen);
                                 String text = new String(buf, 27 + idlen + 1 + grouplen, packet.getLength() - (27 + idlen + 1 + grouplen), "UTF-8");
 
-                                ImageView view = (ImageView)findViewById(R.id.controlPanel);
-                                int viewWidth = view.getWidth();
-                                int viewHeight = view.getHeight();
-
-                                ICustomControl radiobutton = new CustomRadioButton(
+                                ImageView view = findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth(), viewHeight = view.getHeight();
+                                ICustomControl control = new CustomRadioButton(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         checkColor, textColor, state, id, group, text);
-
-                                netsbloxSend(new byte[] { buf[0], (byte)(tryAddCustomControl(radiobutton) ? 0 : 2) }, packet.getSocketAddress());
+                                netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
                         }
@@ -1251,7 +1122,8 @@ public class MainActivity extends AppCompatActivity {
                     try {
                         synchronized (pipeQueue) {
                             for (DatagramPacket packet : pipeQueue) {
-                                udpSocket.send(packet);
+                                try { udpSocket.send(packet); } // ignore errors here so we can clear out the pipe even on failure
+                                catch (Exception ignored) {}
                             }
                             pipeQueue.clear();
                             pipeQueue.wait();
@@ -1317,8 +1189,6 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // --------------------------------------------------
-
         List<String> failedPermissions = new ArrayList<>();
         for (PermissionRequest r : REQUESTED_PERMISSIONS) {
             if (ContextCompat.checkSelfPermission(this, r.permission) != PackageManager.PERMISSION_GRANTED) {
@@ -1367,10 +1237,8 @@ public class MainActivity extends AppCompatActivity {
         appendBytes(b, macAddress);
         title.setText(b.toString());
 
-        // --------------------------------------------------
-
-        getNewPassword();
-        _rawPassword = 0; // for development purposes
+        //invalidatePassword();
+        setPassword(0); // for development purposes
 
         // --------------------------------------------------
 
@@ -1422,28 +1290,14 @@ public class MainActivity extends AppCompatActivity {
 
         orientationCalculator = new OrientationCalculator(accelerometer, magneticField);
 
-        // --------------------------------------------------
-
         location = new LocationSensor(this);
         location.start();
-
-        // --------------------------------------------------
 
         soundSensor = new SoundSensor();
 
         // --------------------------------------------------
 
-        // generate a default image for the networking interface and display (if enabled)
-        ImageView imgDisplay = (ImageView)findViewById(R.id.snapshotDisplay);
-        Bitmap defaultImg = Bitmap.createBitmap(50, 50, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(defaultImg);
-        Paint paint = new Paint();
-        paint.setColor(Color.BLACK);
-        canvas.drawRect(0, 0, defaultImg.getWidth(), defaultImg.getHeight(), paint);
-
-        // --------------------------------------------------
-
-        ImageView controlsView = (ImageView)findViewById(R.id.controlPanel);
+        ImageView controlsView = findViewById(R.id.controlPanel);
         controlsView.setOnTouchListener((v, e) -> handleCustomControlOnTouch(v, e));
 
         // repeat canvas redraw until first success (we need to wait for control constraints to resolve to get size)
@@ -1475,43 +1329,6 @@ public class MainActivity extends AppCompatActivity {
         for (byte v : bytes) {
             b.append(String.format("%02x",v));
         }
-    }
-
-    private String getSensorString() {
-        StringBuilder b = new StringBuilder();
-
-        // motion sensors
-        if (accelerometer.supported) { b.append("Accelerometer: "); appendVector(b, accelerometer.data); b.append('\n'); }
-        if (gravity.supported) { b.append("Gravity: "); appendVector(b, gravity.data); b.append('\n'); }
-        if (gyroscope.supported) { b.append("Gyroscope: "); appendVector(b, gyroscope.data); b.append('\n'); }
-        if (linearAcceleration.supported) { b.append("Linear Accel.: "); appendVector(b, linearAcceleration.data); b.append('\n'); }
-        if (rotationVector.supported) { b.append("Rot. Vector: "); appendVector(b, rotationVector.data); b.append('\n'); }
-        if (stepCounter.supported) { b.append("Step Count: "); appendVector(b, stepCounter.data); b.append('\n'); }
-
-        // position sensors
-        if (gameRotationVector.supported) { b.append("Game Rot.: "); appendVector(b, gameRotationVector.data); b.append('\n'); }
-        if (geomagneticRotationVector.supported) { b.append("Geomag. Rot.: "); appendVector(b, geomagneticRotationVector.data); b.append('\n'); }
-        if (magneticField.supported) { b.append("Mag. Field: "); appendVector(b, magneticField.data); b.append('\n'); }
-        if (proximity.supported) { b.append("Proximity: "); appendVector(b, proximity.data); b.append('\n'); }
-
-        // environment sensors
-        if (ambientTemperature.supported) { b.append("Ambient Temp.: "); appendVector(b, ambientTemperature.data); b.append('\n'); }
-        if (light.supported) { b.append("Light Level: "); appendVector(b, light.data); b.append('\n'); }
-        if (pressure.supported) { b.append("Pressure: "); appendVector(b, pressure.data); b.append('\n'); }
-        if (relativeHumidity.supported) { b.append("Rel. Humidity: "); appendVector(b, relativeHumidity.data); b.append('\n'); }
-
-        // misc sensors
-        if (location.supported) { b.append("Location: "); appendVector(b, location.data); b.append('\n'); }
-
-        // orientation calculator (logical)
-        if (orientationCalculator.supported) {
-            orientationCalculator.calculate();
-            b.append("Orientation: ");
-            appendVector(b, orientationCalculator.data);
-            b.append('\n');
-        }
-
-        return b.toString();
     }
 
     private File createTempImageFile(String extension) throws IOException {
@@ -1589,16 +1406,12 @@ public class MainActivity extends AppCompatActivity {
     public void serverConnectButtonPress(View view) {
         connectToServer();
     }
-
-    public void cameraButtonClick(View view) {
-
-    }
     public void newPasswordButtonClick(View view) {
         new AlertDialog.Builder(this)
                 .setTitle("Confirmation")
                 .setMessage("Are you sure you want to regenerate the password? This may break active connections.")
                 .setIcon(android.R.drawable.ic_dialog_alert)
-                .setPositiveButton(android.R.string.yes, (d, w) -> getNewPassword())
+                .setPositiveButton(android.R.string.yes, (d, w) -> invalidatePassword())
                 .setNegativeButton(android.R.string.no, null)
                 .show();
     }
