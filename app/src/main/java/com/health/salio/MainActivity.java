@@ -96,8 +96,6 @@ public class MainActivity extends AppCompatActivity {
             new PermissionRequest(Manifest.permission.RECORD_AUDIO, "Record Audio"),
     };
 
-    private static final String NOT_SUPPORTED_STRING = "Not Supported or Disabled";
-
     // ------------------------------------
 
     private static final int PERMISSIONS_REQUEST_CODE = 0x2301;
@@ -365,8 +363,12 @@ public class MainActivity extends AppCompatActivity {
         Bitmap getImage();
         void setImage(Bitmap newimg, boolean recycleOld);
     }
+    private interface ITextLike extends ICustomControl {
+        String getText();
+        void setText(String newtext);
+    }
 
-    private class CustomButton implements ICustomControl {
+    private class CustomButton implements ICustomControl, ITextLike {
         private int posx, posy, width, height;
         private int color, textColor;
         private final byte[] id;
@@ -407,6 +409,14 @@ public class MainActivity extends AppCompatActivity {
         }
         @Override
         public byte[] getID() { return id; }
+
+        @Override
+        public String getText() { return text; }
+        @Override
+        public void setText(String text) {
+            this.text = text;
+            redrawCustomControls(false);
+        }
     }
     private class CustomImageBox implements ICustomControl, IImageLike {
         private int posx, posy, width, height;
@@ -462,7 +472,7 @@ public class MainActivity extends AppCompatActivity {
             redrawCustomControls(false);
         }
     }
-    private class CustomTextField implements ICustomControl {
+    private class CustomTextField implements ICustomControl, ITextLike {
         private int posx, posy, width, height;
         private int color, textColor;
         private final byte[] id;
@@ -541,8 +551,16 @@ public class MainActivity extends AppCompatActivity {
         }
         @Override
         public byte[] getID() { return id; }
+
+        @Override
+        public String getText() { return text; }
+        @Override
+        public void setText(String text) {
+            this.text = text;
+            redrawCustomControls(false);
+        }
     }
-    private class CustomLabel implements ICustomControl {
+    private class CustomLabel implements ICustomControl, ITextLike {
         private int posx, posy;
         private int textColor;
         private final byte[] id;
@@ -573,12 +591,20 @@ public class MainActivity extends AppCompatActivity {
         public void handleClick(MainActivity context) { }
         @Override
         public byte[] getID() { return id; }
+
+        @Override
+        public String getText() { return text; }
+        @Override
+        public void setText(String text) {
+            this.text = text;
+            redrawCustomControls(false);
+        }
     }
 
     private enum CheckboxStyle {
         CheckBox, ToggleSwitch,
     }
-    private class CustomCheckbox implements ICustomControl, IToggleable {
+    private class CustomCheckbox implements ICustomControl, IToggleable, ITextLike {
         private int posx, posy;
         private int checkColor, textColor;
         private boolean state;
@@ -684,8 +710,16 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public boolean getToggleState() { return state; }
+
+        @Override
+        public String getText() { return text; }
+        @Override
+        public void setText(String text) {
+            this.text = text;
+            redrawCustomControls(false);
+        }
     }
-    private class CustomRadioButton implements ICustomControl, IToggleable {
+    private class CustomRadioButton implements ICustomControl, IToggleable, ITextLike {
         private int posx, posy;
         private int checkColor, textColor;
         private boolean state;
@@ -756,6 +790,14 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public boolean getToggleState() { return state; }
+
+        @Override
+        public String getText() { return text; }
+        @Override
+        public void setText(String text) {
+            this.text = text;
+            redrawCustomControls(false);
+        }
     }
 
     private static final int MAX_CUSTOM_CONTROLS = 128;
@@ -952,11 +994,37 @@ public class MainActivity extends AppCompatActivity {
                                 }
                                 break;
                             }
+                            case 'H': { // set text
+                                if (packet.getLength() < 10) continue;
+                                int idlen = (int)buf[9] & 0xff;
+                                if (packet.getLength() < 10 + idlen) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 10, 10 + idlen); // text content is everything after this block
+                                ITextLike target = (ITextLike)getCustomControlWithIDWhere(id, c -> c instanceof ITextLike);
+                                if (target == null) netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress());
+                                else {
+                                    String text = new String(buf, 10 + idlen, packet.getLength() - (10 + idlen), "UTF-8");
+                                    target.setText(text);
+                                    netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                }
+                                break;
+                            }
+                            case 'h': { // get text
+                                if (packet.getLength() < 9) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
+                                ITextLike target = (ITextLike)getCustomControlWithIDWhere(id, c -> c instanceof ITextLike);
+                                if (target == null) netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
+                                else {
+                                    byte[] content = target.getText().getBytes("UTF-8");
+                                    netsbloxSend(ByteBuffer.allocate(2 + content.length).put(buf[0]).put((byte)0).put(content).array(), packet.getSocketAddress());
+                                }
+                                break;
+                            }
                             case 'W': { // get toggle state
                                 if (packet.getLength() < 9) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
                                 IToggleable target = (IToggleable)getCustomControlWithIDWhere(id, c -> c instanceof IToggleable);
                                 netsbloxSend(new byte[] { buf[0], (byte)(target == null ? 2 : target.getToggleState() ? 1 : 0) }, packet.getSocketAddress());
+                                break;
                             }
                             case 'C': { // clear custom controls
                                 if (packet.getLength() != 9) continue;
