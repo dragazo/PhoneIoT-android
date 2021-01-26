@@ -111,7 +111,7 @@ public class MainActivity extends AppCompatActivity {
 
     // ------------------------------------
 
-    private static class SensorInfo implements SensorEventListener, BasicSensor {
+    private class SensorInfo implements SensorEventListener, BasicSensor {
         public Sensor sensor;
         public float[] data;
         public boolean supported;
@@ -121,20 +121,22 @@ public class MainActivity extends AppCompatActivity {
             data = new float[dims];
             supported = false;
         }
-        public void connect(SensorManager manager) {
-            if (sensor != null) {
-                supported = manager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_NORMAL);
-            }
+        public void start() {
+            if (sensor != null) supported = sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_NORMAL);
         }
-        public void updateData(float[] newData) {
+        public void stop() {
+            if (sensor != null) sensorManager.unregisterListener(this, sensor);
+        }
+
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            float[] newData = event.values;
+
             // copy over what we were given - anything we didn't get we set to zero (some sensors have optional values)
             int m = Math.min(data.length, newData.length);
             for (int i = 0; i < m; ++i) data[i] = newData[i];
             for (int i = m; i < data.length; ++i) data[i] = 0;
         }
-
-        @Override
-        public void onSensorChanged(SensorEvent event) { updateData(event.values); }
         @Override
         public void onAccuracyChanged(Sensor sensor, int accuracy) {}
 
@@ -147,6 +149,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ----------------------------------------------
+
+    private SensorManager sensorManager;
 
     // motion sensors
     private SensorInfo accelerometer;
@@ -273,12 +277,21 @@ public class MainActivity extends AppCompatActivity {
         private static final long SAMPLE_RATE = 250; // ms
         private static final float NORMALIZATION_FACTOR = 32768.0f;
 
-        private MediaRecorder recorder;
+        private MediaRecorder recorder = new MediaRecorder();
         private final Handler handler = new Handler();
 
         public SoundSensor() {
+            new Runnable() {
+                @Override
+                public void run() {
+                    try { data[0] = (float)recorder.getMaxAmplitude() / NORMALIZATION_FACTOR; }
+                    catch (Exception ignore) { }
+                    handler.postDelayed(this, SAMPLE_RATE);
+                }
+            }.run();
+        }
+        public void start() {
             try {
-                recorder = new MediaRecorder();
                 recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
                 recorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP);
                 recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
@@ -286,20 +299,13 @@ public class MainActivity extends AppCompatActivity {
                 recorder.prepare();
                 recorder.start();
                 supported = true;
-
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        try { data[0] = (float)recorder.getMaxAmplitude() / NORMALIZATION_FACTOR; }
-                        catch (Exception ignore) { }
-                        handler.postDelayed(this, SAMPLE_RATE);
-                    }
-                }.run();
             }
-            catch (Exception ignore) {
-                if (recorder != null) recorder.release();
+            catch (Exception ignored) {
                 supported = false;
             }
+        }
+        public void stop() {
+            recorder.stop();
         }
 
         @Override
@@ -913,6 +919,15 @@ public class MainActivity extends AppCompatActivity {
                 DatagramPacket packet = new DatagramPacket(buf, 0, buf.length);
                 while (true) {
                     try {
+                        // wait until we're in the foreground (sensors are running)
+                        synchronized (sensorsRunning) {
+                            while (!sensorsRunning[0]) {
+                                next_heartbeat = 0;    // set it so we trigger a heartbeat the moment we wake up
+                                sensorsRunning.wait(); // wait for sensors to be enabled - could take a very long time
+                            }
+                        }
+
+                        // handle pending reconnect requests from the gui thread
                         String recon = reconnectRequest;
                         reconnectRequest = null;
                         if (recon != null) {
@@ -924,6 +939,7 @@ public class MainActivity extends AppCompatActivity {
                             catch (Exception ex) { System.err.printf("reconnect failure: %s\n", ex); }
                         }
 
+                        // send a heartbeat if we're over the next timestamp
                         long now_time = System.currentTimeMillis();
                         if (now_time >= next_heartbeat && netsbloxAddress != null) {
                             netsbloxSend(new byte[] { 'I' }, netsbloxAddress); // send heartbeat so server knows we're still there
@@ -1280,6 +1296,70 @@ public class MainActivity extends AppCompatActivity {
         finishInitialization();
     }
 
+    private final boolean[] sensorsRunning = new boolean[] { false };
+    private void startSensors() {
+        synchronized(sensorsRunning) {
+            if (sensorsRunning[0]) return;
+            sensorsRunning[0] = true;
+            sensorsRunning.notifyAll(); // do this to wake up any threads that are suspended in the background
+        }
+
+        // motion sensors
+        accelerometer.start();
+        gravity.start();
+        gyroscope.start();
+        linearAcceleration.start();
+        rotationVector.start();
+        stepCounter.start();
+
+        // position sensors
+        gameRotationVector.start();
+        geomagneticRotationVector.start();
+        magneticField.start();
+        proximity.start();
+
+        // environment sensors
+        ambientTemperature.start();
+        light.start();
+        pressure.start();
+        relativeHumidity.start();
+
+        // misc sensors
+        soundSensor.start();
+        location.start();
+    }
+    private void stopSensors() {
+        synchronized(sensorsRunning) {
+            if (!sensorsRunning[0]) return;
+            sensorsRunning[0] = false;
+        }
+
+        // motion sensors
+        accelerometer.stop();
+        gravity.stop();
+        gyroscope.stop();
+        linearAcceleration.stop();
+        rotationVector.stop();
+        stepCounter.stop();
+
+        // position sensors
+        gameRotationVector.stop();
+        geomagneticRotationVector.stop();
+        magneticField.stop();
+        proximity.stop();
+
+        // environment sensors
+        ambientTemperature.stop();
+        light.stop();
+        pressure.stop();
+        relativeHumidity.stop();
+
+        // misc sensors
+        soundSensor.stop();
+        location.stop();
+    }
+
+    private boolean postInitializationComplete = false; // marks that we've finished everything and are ready for user interaction
     private void finishInitialization() {
         macAddress = new byte[6];
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
@@ -1310,7 +1390,7 @@ public class MainActivity extends AppCompatActivity {
 
         // --------------------------------------------------
 
-        SensorManager sensorManager = (SensorManager)getSystemService(Context.SENSOR_SERVICE);
+        sensorManager = (SensorManager)getSystemService(Context.SENSOR_SERVICE);
 
         // motion sensors
         accelerometer = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER), 3);
@@ -1332,36 +1412,15 @@ public class MainActivity extends AppCompatActivity {
         pressure = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE), 1);
         relativeHumidity = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY), 1);
 
-        // --------------------------------------------------
-
-        // motion sensors
-        accelerometer.connect(sensorManager);
-        gravity.connect(sensorManager);
-        gyroscope.connect(sensorManager);
-        linearAcceleration.connect(sensorManager);
-        rotationVector.connect(sensorManager);
-        stepCounter.connect(sensorManager);
-
-        // position sensors
-        gameRotationVector.connect(sensorManager);
-        geomagneticRotationVector.connect(sensorManager);
-        magneticField.connect(sensorManager);
-        proximity.connect(sensorManager);
-
-        // environment sensors
-        ambientTemperature.connect(sensorManager);
-        light.connect(sensorManager);
-        pressure.connect(sensorManager);
-        relativeHumidity.connect(sensorManager);
-
-        // --------------------------------------------------
+        // misc sensors
 
         orientationCalculator = new OrientationCalculator(accelerometer, magneticField);
-
         location = new LocationSensor(this);
-        location.start();
-
         soundSensor = new SoundSensor();
+
+        // --------------------------------------------------
+
+        startSensors();
 
         // --------------------------------------------------
 
@@ -1380,6 +1439,24 @@ public class MainActivity extends AppCompatActivity {
                 handler.postDelayed(this, 100);
             }
         }.run();
+
+        // --------------------------------------------------
+
+        postInitializationComplete = true;
+        System.err.println("post init complete");
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (postInitializationComplete) startSensors();
+        System.err.println("resuming");
+    }
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (postInitializationComplete) stopSensors();
+        System.err.println("pausing");
     }
 
     private static void appendVector(StringBuilder b, float[] vec) {
