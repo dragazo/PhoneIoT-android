@@ -1381,7 +1381,7 @@ public class MainActivity extends AppCompatActivity {
 
         TextView title = findViewById(R.id.titleText);
         StringBuilder b = new StringBuilder(32);
-        b.append("SalIO - ");
+        b.append("PhoneIoT - ");
         appendBytes(b, macAddress);
         title.setText(b.toString());
 
