@@ -34,6 +34,7 @@ import android.provider.MediaStore;
 import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.view.MotionEvent;
+import android.view.SoundEffectConstants;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -359,7 +360,7 @@ public class MainActivity extends AppCompatActivity {
     private interface ICustomControl {
         void draw(Canvas canvas, Paint paint);
         boolean containsPoint(int x, int y);
-        void handleClick(MainActivity context);
+        void handleClick(View view, MainActivity context);
         byte[] getID();
     }
     private interface IToggleable extends ICustomControl {
@@ -409,9 +410,11 @@ public class MainActivity extends AppCompatActivity {
             return x >= posx && y >= posy && x <= posx + width && y <= posy + height;
         }
         @Override
-        public void handleClick(MainActivity context) {
+        public void handleClick(View view, MainActivity context) {
             try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
+
+            view.playSoundEffect(SoundEffectConstants.CLICK);
         }
         @Override
         public byte[] getID() { return id; }
@@ -462,7 +465,9 @@ public class MainActivity extends AppCompatActivity {
             return x >= posx && y >= posy && x <= posx + width && y <= posy + height;
         }
         @Override
-        public void handleClick(MainActivity context) {
+        public void handleClick(View view, MainActivity context) {
+            view.playSoundEffect(SoundEffectConstants.CLICK);
+
             requestImageFor(this);
         }
         @Override
@@ -528,8 +533,10 @@ public class MainActivity extends AppCompatActivity {
             return x >= posx && y >= posy && x <= posx + width && y <= posy + height;
         }
         @Override
-        public void handleClick(MainActivity context) {
+        public void handleClick(View view, MainActivity context) {
             try {
+                view.playSoundEffect(SoundEffectConstants.CLICK);
+
                 AlertDialog.Builder prompt = new AlertDialog.Builder(context);
                 prompt.setMessage("Message");
                 prompt.setTitle("Title");
@@ -594,7 +601,7 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public boolean containsPoint(int x, int y) { return false; }
         @Override
-        public void handleClick(MainActivity context) { }
+        public void handleClick(View view, MainActivity context) { }
         @Override
         public byte[] getID() { return id; }
 
@@ -619,7 +626,7 @@ public class MainActivity extends AppCompatActivity {
         private CheckboxStyle style;
 
         private static final int CHECKBOX_WIDTH = 35;
-        private static final int CHECKBOX_PADDING = 15;
+        private static final int CHECKBOX_PADDING = 20;
 
         public CustomCheckbox(int posx, int posy, int checkColor, int textColor, boolean state, byte[] id, String text, CheckboxStyle style) {
             this.posx = posx;
@@ -704,12 +711,14 @@ public class MainActivity extends AppCompatActivity {
                     x <= rect.right + CHECKBOX_PADDING && y <= rect.bottom + CHECKBOX_PADDING;
         }
         @Override
-        public void handleClick(MainActivity context) {
+        public void handleClick(View view, MainActivity context) {
             state = !state;
             context.redrawCustomControls(false);
 
             try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(2 + id.length).put((byte)'z').put((byte)(state ? 1 : 0)).put(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
+
+            view.playSoundEffect(SoundEffectConstants.CLICK);
         }
         @Override
         public byte[] getID() { return id; }
@@ -734,7 +743,7 @@ public class MainActivity extends AppCompatActivity {
         private String text;
 
         private static final int RADIO_WIDTH = 35;
-        private static final int RADIO_PADDING = 15;
+        private static final int RADIO_PADDING = 20;
         private static final int RADIO_INSET = 5;
 
         public CustomRadioButton(int posx, int posy, int checkColor, int textColor, boolean state, byte[] id, byte[] group, String text) {
@@ -776,7 +785,7 @@ public class MainActivity extends AppCompatActivity {
                     x <= posx + RADIO_WIDTH + RADIO_PADDING && y <= posy + RADIO_WIDTH + RADIO_PADDING;
         }
         @Override
-        public void handleClick(MainActivity context) {
+        public void handleClick(View view, MainActivity context) {
             // set state to true and uncheck every other radiobutton in the same group
             state = true;
             for (ICustomControl other : context.customControls) {
@@ -789,6 +798,8 @@ public class MainActivity extends AppCompatActivity {
 
             try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
+
+            view.playSoundEffect(SoundEffectConstants.CLICK);
         }
 
         @Override
@@ -859,7 +870,7 @@ public class MainActivity extends AppCompatActivity {
         for (int i = controls.size() - 1; i >= 0; --i) {
             ICustomControl control = controls.get(i);
             if (control.containsPoint(x, y)) {
-                control.handleClick(this);
+                control.handleClick(view, this);
                 break;
             }
         }
