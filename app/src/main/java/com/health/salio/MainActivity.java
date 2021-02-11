@@ -106,7 +106,7 @@ public class MainActivity extends AppCompatActivity {
 
     private interface BasicSensor {
         boolean isSupported();
-        float[] getData();
+        double[] getData();
         void calculate();
     }
 
@@ -114,12 +114,12 @@ public class MainActivity extends AppCompatActivity {
 
     private class SensorInfo implements SensorEventListener, BasicSensor {
         public Sensor sensor;
-        public float[] data;
+        public double[] data;
         public boolean supported;
 
         public SensorInfo(Sensor s, int dims) {
             sensor = s;
-            data = new float[dims];
+            data = new double[dims];
             supported = false;
         }
         public void start() {
@@ -144,7 +144,7 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public boolean isSupported() { return supported; }
         @Override
-        public float[] getData() { return data; }
+        public double[] getData() { return data; }
         @Override
         public void calculate() { }
     }
@@ -177,10 +177,11 @@ public class MainActivity extends AppCompatActivity {
 
     // the hardware orientation sensor has been deprecated for a while, so we simulate it with the accelerometer and magnetometer
     private static class OrientationCalculator implements BasicSensor {
-        public final float[] data = new float[3];
-        public boolean supported = false;
+        public final double[] data = new double[3];
 
         private final float[] matrixBuffer = new float[9];
+        private final float[] accelBuffer = new float[3];
+        private final float[] magnetBuffer = new float[3];
 
         private final SensorInfo accel;
         private final SensorInfo magnet;
@@ -188,17 +189,21 @@ public class MainActivity extends AppCompatActivity {
         public OrientationCalculator(SensorInfo accelerometerSource, SensorInfo magnetometerSource) {
             accel = accelerometerSource;
             magnet = magnetometerSource;
-            supported = accel.supported && magnet.supported;
         }
 
         @Override
-        public boolean isSupported() { return supported; }
+        public boolean isSupported() { return accel.isSupported() && magnet.isSupported(); }
         @Override
-        public float[] getData() { return data; }
+        public double[] getData() { return data; }
         @Override
         public void calculate() {
-            SensorManager.getRotationMatrix(matrixBuffer, null, accel.data, magnet.data);
-            SensorManager.getOrientation(matrixBuffer, data);
+            for (int i = 0; i < 3; ++i) accelBuffer[i] = (float)accel.data[i];
+            for (int i = 0; i < 3; ++i) magnetBuffer[i] = (float)magnet.data[i];
+
+            SensorManager.getRotationMatrix(matrixBuffer, null, accelBuffer, magnetBuffer);
+            SensorManager.getOrientation(matrixBuffer, accelBuffer); // store into this buffer temporarily
+
+            for (int i = 0; i < 3; ++i) data[i] = accelBuffer[i]; // an extract into real data array
         }
     }
 
@@ -206,8 +211,8 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
-    private class LocationSensor implements LocationListener, BasicSensor {
-        public final float[] data = new float[2];
+    private class LocationSensor implements BasicSensor {
+        public final double[] data = new double[4];
         public int updateCount = 0;
         public boolean supported = false;
 
@@ -229,8 +234,11 @@ public class MainActivity extends AppCompatActivity {
                 public void onLocationResult(LocationResult locationResult) {
                     if (locationResult != null) {
                         Location loc = locationResult.getLastLocation();
-                        location.data[0] = (float)loc.getLatitude();
-                        location.data[1] = (float)loc.getLongitude();
+                        data[0] = loc.getLatitude();
+                        data[1] = loc.getLongitude();
+                        data[2] = loc.getBearing();
+                        data[3] = loc.getAltitude();
+
                         updateCount += 1;
                     }
                 }
@@ -251,19 +259,9 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
-        public void onLocationChanged(Location loc) {
-            data[0] = (float)loc.getLatitude();
-            data[1] = (float)loc.getLongitude();
-        }
-        @Override
-        public void onProviderDisabled(@NonNull String provider) { } // if we don't override these, app crashes when location is turned off
-        @Override
-        public void onProviderEnabled(@NonNull String provider) { } // if we don't override these, app crashes when location is turned off
-
-        @Override
         public boolean isSupported() { return supported; }
         @Override
-        public float[] getData() { return data; }
+        public double[] getData() { return data; }
         @Override
         public void calculate() { }
     }
@@ -272,7 +270,7 @@ public class MainActivity extends AppCompatActivity {
     // ----------------------------------------------
 
     private static class SoundSensor implements BasicSensor {
-        private final float[] data = new float[1];
+        private final double[] data = new double[1];
         private boolean supported = false;
 
         private static final long SAMPLE_RATE = 250; // ms
@@ -312,7 +310,7 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public boolean isSupported() { return supported; }
         @Override
-        public float[] getData() { return data; }
+        public double[] getData() { return data; }
         @Override
         public void calculate() { }
     }
@@ -892,7 +890,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int SERVER_PORT = 1976;
     private static final int UDP_PORT = 8888;
     private SocketAddress netsbloxAddress = null; // target for heartbeat comms - can be changed at will
-    private DatagramSocket udpSocket = null; // our socket for udp comms - do not close or change it
+    private DatagramSocket udpSocket = null;      // our socket for udp comms - do not close or change it
 
     private static final String MAC_ADDR_PREF_NAME = "MAC_ADDR"; // name to use for mac addr in stored app preferences
     private byte[] macAddress = null;
@@ -943,7 +941,13 @@ public class MainActivity extends AppCompatActivity {
                         reconnectRequest = null;
                         if (recon != null) {
                             try {
-                                netsbloxAddress = new InetSocketAddress(recon, SERVER_PORT);
+                                SocketAddress temp = new InetSocketAddress(recon, SERVER_PORT);
+                                // check to make sure the address is good (send empty packet, which will be ignored)
+                                synchronized (pipeQueue) { // lock pipeQueue so we can send from the socket
+                                    udpSocket.send(new DatagramPacket(new byte[] {}, 0, temp));
+                                }
+
+                                netsbloxAddress = temp; // if we get here it was a valid address
                                 next_heartbeat = 0;
                                 System.err.printf("reconnected to target: %s\n", netsbloxAddress);
                             }
@@ -969,9 +973,9 @@ public class MainActivity extends AppCompatActivity {
                             if (packet.getLength() != 9) return; // ignore invalid format
                             if (src.isSupported()) { // if the sensor is supported, send back all the content
                                 src.calculate(); // compute software-emulated logic (if any)
-                                float[] v = src.getData();
-                                ByteBuffer b = ByteBuffer.allocate(1 + v.length * 4).put(buf[0]);
-                                for (float val : v) b.putFloat(val);
+                                double[] v = src.getData();
+                                ByteBuffer b = ByteBuffer.allocate(1 + v.length * 8).put(buf[0]);
+                                for (double val : v) b.putDouble(val);
                                 netsbloxSend(b.array(), packet.getSocketAddress());
                             }
                             // otherwise send back the acknowledgement, but no data
@@ -1206,6 +1210,7 @@ public class MainActivity extends AppCompatActivity {
                     catch (SocketTimeoutException ignored) {} // this is fine - just means we hit the timeout we requested
                     catch (Exception ex) {
                         System.err.printf("udp network thread exception: (addr %s): %s\n", netsbloxAddress, ex);
+                        try { Thread.sleep(100); } catch (Exception ignored) {} // do this so a loop of failures doesn't burn up network resources and power
                     }
                 }
             });
@@ -1562,6 +1567,7 @@ public class MainActivity extends AppCompatActivity {
     // ------------------------------------------------------------------------------
 
     public void serverConnectButtonPress(View view) {
+        findViewById(R.id.serverHostText).clearFocus(); // do this so we don't have a blinking cursor for all of eternity
         connectToServer();
     }
     public void newPasswordButtonClick(View view) {
