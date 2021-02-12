@@ -1016,7 +1016,7 @@ public class MainActivity extends AppCompatActivity {
                                 if (packet.getLength() < 10 + idlen) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 10, 10 + idlen); // image content is everything after this block
                                 IImageLike target = (IImageLike)getCustomControlWithIDWhere(id, c -> c instanceof IImageLike);
-                                if (target == null) netsbloxSend(new byte[]{ buf[0], 1 }, packet.getSocketAddress());
+                                if (target == null) netsbloxSend(new byte[]{ buf[0], 3 }, packet.getSocketAddress());
                                 else {
                                     Bitmap img = BitmapFactory.decodeByteArray(buf, 10 + idlen, packet.getLength() - (10 + idlen));
                                     System.err.printf("decoded image: %dx%d\n", img.getWidth(), img.getHeight());
@@ -1031,7 +1031,7 @@ public class MainActivity extends AppCompatActivity {
                                 if (packet.getLength() < 10 + idlen) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 10, 10 + idlen); // text content is everything after this block
                                 ITextLike target = (ITextLike)getCustomControlWithIDWhere(id, c -> c instanceof ITextLike);
-                                if (target == null) netsbloxSend(new byte[] { buf[0], 1 }, packet.getSocketAddress());
+                                if (target == null) netsbloxSend(new byte[] { buf[0], 3 }, packet.getSocketAddress());
                                 else {
                                     String text = new String(buf, 10 + idlen, packet.getLength() - (10 + idlen), "UTF-8");
                                     target.setText(text);
