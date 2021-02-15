@@ -2,6 +2,9 @@
 # Created by https://www.toptal.com/developers/gitignore/api/androidstudio,android,java,intellij,linux,windows,macos
 # Edit at https://www.toptal.com/developers/gitignore?templates=androidstudio,android,java,intellij,linux,windows,macos
 
+# custom ignores
+app/release/
+
 ### Android ###
 # Built application files
 *.apk

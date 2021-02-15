@@ -907,7 +907,7 @@ public class MainActivity extends AppCompatActivity {
         void apply(BasicSensor sensor) throws Exception;
     }
     @FunctionalInterface
-    private interface Predicate<T> {
+    private interface Predicate<T> { // for reasons that baffle even sheogorath, java.util.function.Predicate is only API level 24+
         boolean test(T t);
     }
 
@@ -1380,15 +1380,19 @@ public class MainActivity extends AppCompatActivity {
         macAddress = new byte[6];
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
         long macInt = -1;
-        try { macInt = prefs.getLong(MAC_ADDR_PREF_NAME, -1); }
-        catch (Exception ex) { Toast.makeText(this, ex.toString(), Toast.LENGTH_LONG).show(); }
+        try {
+            macInt = prefs.getLong(MAC_ADDR_PREF_NAME, -1);
+        }
+        catch (Exception ex) {
+            Toast.makeText(this, ex.toString(), Toast.LENGTH_LONG).show();
+        }
         if (macInt < 0) {
             rand.nextBytes(macAddress); // generate a random fake mac addr (new versions of android no longer support getting the real one)
 
             // cache the generated value in preferences (so multiple application starts have the same id)
             macInt = 0;
             for (byte b : macAddress) macInt = (macInt << 8) | ((long)b & 0xff); // convert array to int
-            prefs.edit().putLong(MAC_ADDR_PREF_NAME, macInt).commit();
+            prefs.edit().putLong(MAC_ADDR_PREF_NAME, macInt).apply();
         }
         else {
             // convert int to array
@@ -1475,17 +1479,6 @@ public class MainActivity extends AppCompatActivity {
         System.err.println("pausing");
     }
 
-    private static void appendVector(StringBuilder b, float[] vec) {
-        float s = 0;
-        for (int i = 0; i < vec.length; ) {
-            s += vec[i] * vec[i];
-            b.append(String.format("%.3f", vec[i]));
-            if (++i < vec.length) b.append(", ");
-        }
-        b.append(" (");
-        b.append(String.format("%.3f", Math.sqrt(s)));
-        b.append(')');
-    }
     private static void appendBytes(StringBuilder b, byte[] bytes) {
         for (byte v : bytes) {
             b.append(String.format("%02x",v));
