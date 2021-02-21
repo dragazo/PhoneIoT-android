@@ -902,6 +902,11 @@ public class MainActivity extends AppCompatActivity {
     private String reconnectRequest = null;
     private final List<DatagramPacket> pipeQueue = new ArrayList<>();
 
+    // schedules a new toast to be shown for the given duration - this works from any calling thread
+    private void scheduleToast(String msg, int duration) {
+        this.runOnUiThread(() -> Toast.makeText(this, msg, duration).show());
+    }
+
     @FunctionalInterface
     private interface SensorConsumer {
         void apply(BasicSensor sensor) throws Exception;
@@ -942,16 +947,17 @@ public class MainActivity extends AppCompatActivity {
                         if (recon != null) {
                             try {
                                 SocketAddress temp = new InetSocketAddress(recon, SERVER_PORT);
-                                // check to make sure the address is good (send empty packet, which will be ignored)
+                                byte[] msg = netsbloxFormat(new byte[] { 'I', 0 }); // send a hearbeat with an ack request flag
+
+                                // check to make sure the address is good (send empty packet, which will trigger the server to send us an 'I' conn ack message)
                                 synchronized (pipeQueue) { // lock pipeQueue so we can send from the socket
-                                    udpSocket.send(new DatagramPacket(new byte[] {}, 0, temp));
+                                    udpSocket.send(new DatagramPacket(msg, msg.length, temp)); // netsbloxSend would hide the exception, which is what we want to test for
                                 }
 
                                 netsbloxAddress = temp; // if we get here it was a valid address
-                                next_heartbeat = 0;
                                 System.err.printf("reconnected to target: %s\n", netsbloxAddress);
                             }
-                            catch (Exception ex) { System.err.printf("reconnect failure: %s\n", ex); }
+                            catch (Exception ex) { scheduleToast("endpoint does not exist", Toast.LENGTH_SHORT); }
                         }
 
                         // send a heartbeat if we're over the next timestamp
@@ -959,12 +965,19 @@ public class MainActivity extends AppCompatActivity {
                         if (now_time >= next_heartbeat && netsbloxAddress != null) {
                             netsbloxSend(new byte[] { 'I' }, netsbloxAddress); // send heartbeat so server knows we're still there
                             next_heartbeat = now_time + 30 * 1000; // next heartbeat in 30 seconds
-                            System.err.println("sent heartbeat");
                         }
 
                         // wait for a message - short duration is so we can see reconnections quickly
                         udpSocket.setSoTimeout(1000);
                         udpSocket.receive(packet);
+
+                        System.err.printf("packet: %d with prefix %s = %d\n", packet.getLength(), (char)buf[0], (int)buf[0] & 0xff);
+
+                        // check for things that don't need auth
+                        if (packet.getLength() == 1 && buf[0] == 'I') { // connection acknowledgment
+                            scheduleToast("connected to server", Toast.LENGTH_SHORT);
+                            continue;
+                        }
 
                         // ignore anything that's invalid or fails to auth
                         if (packet.getLength() < 9 || fromBEBytes(buf, 1, 8) != getPassword()) continue;
@@ -1235,12 +1248,16 @@ public class MainActivity extends AppCompatActivity {
             pipeThread.start();
         }
     }
+    private byte[] netsbloxFormat(byte[] content) {
+        byte[] expanded = new byte[content.length + 10];
+        for (int i = 0; i < 6; ++i) expanded[i] = macAddress[i];
+        for (int i = 0; i < 4; ++i) expanded[6 + i] = 0; // we can set the time field to zero (pretty sure it isn't actually used by the server)
+        for (int i = 0; i < content.length; ++i) expanded[10 + i] = content[i];
+        return expanded;
+    }
     private void netsbloxSend(byte[] content, SocketAddress dest) {
         if (udpSocket != null) {
-            byte[] expanded = new byte[content.length + 10];
-            for (int i = 0; i < 6; ++i) expanded[i] = macAddress[i];
-            for (int i = 0; i < 4; ++i) expanded[6 + i] = 0; // we can set the time field to zero (pretty sure it isn't actually used by the server)
-            for (int i = 0; i < content.length; ++i) expanded[10 + i] = content[i];
+            byte[] expanded = netsbloxFormat(content);
             DatagramPacket packet = new DatagramPacket(expanded, expanded.length, dest);
             synchronized (pipeQueue) {
                 pipeQueue.add(packet);
