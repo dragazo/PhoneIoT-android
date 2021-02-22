@@ -70,6 +70,8 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 
@@ -356,10 +358,12 @@ public class MainActivity extends AppCompatActivity {
     // ----------------------------------------------
 
     private interface ICustomControl {
+        byte[] getID();
         void draw(Canvas canvas, Paint paint);
         boolean containsPoint(int x, int y);
-        void handleClick(View view, MainActivity context);
-        byte[] getID();
+        void handleMouseDown(View view, MainActivity context, int x, int y);
+        void handleMouseMove(View view, MainActivity context, int x, int y);
+        void handleMouseUp(View view, MainActivity context);
     }
     private interface IToggleable extends ICustomControl {
         boolean getToggleState();
@@ -379,6 +383,9 @@ public class MainActivity extends AppCompatActivity {
         private final byte[] id;
         private String text;
 
+        private boolean touchColor = false;
+        private static final long TOUCH_COLOR_DURATION = 200;
+
         public CustomButton(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text) {
             this.posx = posx;
             this.posy = posy;
@@ -391,31 +398,45 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
+        public byte[] getID() { return id; }
+        @Override
         public void draw(Canvas canvas, Paint paint) {
             paint.setColor(color);
             paint.setStyle(Paint.Style.FILL);
             canvas.drawRect(posx, posy, posx + width, posy + height, paint);
-            paint.setColor(textColor);
+
+            if (touchColor) {
+                paint.setColor(Color.argb(100, 255, 255, 255));
+                canvas.drawRect(posx, posy, posx + width, posy + height, paint);
+            }
 
             Rect textBounds = new Rect();
             paint.getTextBounds(text, 0, text.length(), textBounds);
 
+            paint.setColor(textColor);
             paint.setTextAlign(Paint.Align.CENTER);
             canvas.drawText(text, posx + (float)width / 2, posy + ((float)height + textBounds.height() - 4) / 2, paint);
         }
+        
         @Override
         public boolean containsPoint(int x, int y) {
             return x >= posx && y >= posy && x <= posx + width && y <= posy + height;
         }
         @Override
-        public void handleClick(View view, MainActivity context) {
+        public void handleMouseDown(View view, MainActivity context, int x, int y) {
             try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
 
             view.playSoundEffect(SoundEffectConstants.CLICK);
+
+            touchColor = true;
         }
         @Override
-        public byte[] getID() { return id; }
+        public void handleMouseMove(View view, MainActivity context, int x, int y) { }
+        @Override
+        public void handleMouseUp(View view, MainActivity context) {
+            touchColor = false;
+        }
 
         @Override
         public String getText() { return text; }
@@ -440,6 +461,8 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
+        public byte[] getID() { return id; }
+        @Override
         public void draw(Canvas canvas, Paint paint) {
             paint.setColor(Color.BLACK);
             paint.setStyle(Paint.Style.FILL);
@@ -463,13 +486,14 @@ public class MainActivity extends AppCompatActivity {
             return x >= posx && y >= posy && x <= posx + width && y <= posy + height;
         }
         @Override
-        public void handleClick(View view, MainActivity context) {
+        public void handleMouseDown(View view, MainActivity context, int x, int y) {
             view.playSoundEffect(SoundEffectConstants.CLICK);
-
             requestImageFor(this);
         }
         @Override
-        public byte[] getID() { return id; }
+        public void handleMouseMove(View view, MainActivity context, int x, int y) { }
+        @Override
+        public void handleMouseUp(View view, MainActivity context) { }
 
         @Override
         public Bitmap getImage() { return img; }
@@ -501,6 +525,8 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
+        public byte[] getID() { return id; }
+        @Override
         public void draw(Canvas canvas, Paint paint) {
             paint.setColor(color);
             paint.setStyle(Paint.Style.STROKE);
@@ -531,7 +557,7 @@ public class MainActivity extends AppCompatActivity {
             return x >= posx && y >= posy && x <= posx + width && y <= posy + height;
         }
         @Override
-        public void handleClick(View view, MainActivity context) {
+        public void handleMouseDown(View view, MainActivity context, int x, int y) {
             try {
                 view.playSoundEffect(SoundEffectConstants.CLICK);
 
@@ -561,7 +587,9 @@ public class MainActivity extends AppCompatActivity {
             catch (Exception ignored) {}
         }
         @Override
-        public byte[] getID() { return id; }
+        public void handleMouseMove(View view, MainActivity context, int x, int y) { }
+        @Override
+        public void handleMouseUp(View view, MainActivity context) { }
 
         @Override
         public String getText() { return text; }
@@ -586,6 +614,8 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
+        public byte[] getID() { return id; }
+        @Override
         public void draw(Canvas canvas, Paint paint) {
             paint.setColor(textColor);
             paint.setStyle(Paint.Style.FILL);
@@ -596,12 +626,15 @@ public class MainActivity extends AppCompatActivity {
 
             canvas.drawText(text, posx, posy + textBounds.height() - 6, paint);
         }
+        
         @Override
         public boolean containsPoint(int x, int y) { return false; }
         @Override
-        public void handleClick(View view, MainActivity context) { }
+        public void handleMouseDown(View view, MainActivity context, int x, int y) { }
         @Override
-        public byte[] getID() { return id; }
+        public void handleMouseMove(View view, MainActivity context, int x, int y) { }
+        @Override
+        public void handleMouseUp(View view, MainActivity context) { }
 
         @Override
         public String getText() { return text; }
@@ -691,12 +724,15 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
+        public byte[] getID() { return id; }
+        @Override
         public void draw(Canvas canvas, Paint paint) {
             switch (style) {
                 case CheckBox: drawCheckbox(canvas, paint); break;
                 case ToggleSwitch: drawToggleswitch(canvas, paint); break;
             }
         }
+        
         @Override
         public boolean containsPoint(int x, int y) {
             RectF rect;
@@ -709,17 +745,17 @@ public class MainActivity extends AppCompatActivity {
                     x <= rect.right + CHECKBOX_PADDING && y <= rect.bottom + CHECKBOX_PADDING;
         }
         @Override
-        public void handleClick(View view, MainActivity context) {
-            state = !state;
-            context.redrawCustomControls(false);
-
+        public void handleMouseDown(View view, MainActivity context, int x, int y) {
             try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(2 + id.length).put((byte)'z').put((byte)(state ? 1 : 0)).put(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
 
             view.playSoundEffect(SoundEffectConstants.CLICK);
+            state = !state;
         }
         @Override
-        public byte[] getID() { return id; }
+        public void handleMouseMove(View view, MainActivity context, int x, int y) { }
+        @Override
+        public void handleMouseUp(View view, MainActivity context) { }
 
         @Override
         public boolean getToggleState() { return state; }
@@ -756,6 +792,8 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
+        public byte[] getID() { return id; }
+        @Override
         public void draw(Canvas canvas, Paint paint) {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(2f);
@@ -777,13 +815,14 @@ public class MainActivity extends AppCompatActivity {
             paint.setTextAlign(Paint.Align.LEFT);
             canvas.drawText(text, posx + RADIO_WIDTH + 17, posy + ((float)RADIO_WIDTH + textBounds.height() - 10) / 2, paint);
         }
+        
         @Override
         public boolean containsPoint(int x, int y) {
             return x >= posx - RADIO_PADDING && y >= posy - RADIO_PADDING &&
                     x <= posx + RADIO_WIDTH + RADIO_PADDING && y <= posy + RADIO_WIDTH + RADIO_PADDING;
         }
         @Override
-        public void handleClick(View view, MainActivity context) {
+        public void handleMouseDown(View view, MainActivity context, int x, int y) {
             // set state to true and uncheck every other radiobutton in the same group
             state = true;
             for (ICustomControl other : context.customControls) {
@@ -792,16 +831,16 @@ public class MainActivity extends AppCompatActivity {
                     if (Arrays.equals(b.group, this.group)) b.state = false;
                 }
             }
-            context.redrawCustomControls(false);
 
             try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress); }
             catch (Exception ignored) {}
 
             view.playSoundEffect(SoundEffectConstants.CLICK);
         }
-
         @Override
-        public byte[] getID() { return id; }
+        public void handleMouseMove(View view, MainActivity context, int x, int y) { }
+        @Override
+        public void handleMouseUp(View view, MainActivity context) { }
 
         @Override
         public boolean getToggleState() { return state; }
@@ -859,21 +898,81 @@ public class MainActivity extends AppCompatActivity {
         redrawCustomControls(false);
         return 0;
     }
-    private boolean handleCustomControlOnTouch(View view, MotionEvent e) {
-        List<ICustomControl> controls = customControls;
-        int x = (int)e.getX();
-        int y = (int)e.getY();
 
-        // find the first thing we clicked (iterate backwards because we draw forwards, so back is on top layer)
-        for (int i = controls.size() - 1; i >= 0; --i) {
-            ICustomControl control = controls.get(i);
-            if (control.containsPoint(x, y)) {
-                control.handleClick(view, this);
-                break;
+    private class PointerInfo {
+        @NonNull public ICustomControl target;
+        public int lastX, lastY;
+
+        public PointerInfo(@NonNull ICustomControl target, int x, int y) {
+            this.target = target;
+            this.lastX = x;
+            this.lastY = y;
+        }
+        public boolean isNewPoint(int x, int y) {
+            return (x != lastX || y != lastY) && target.containsPoint(x, y);
+        }
+    }
+    private final HashMap<Integer, PointerInfo> activePointers = new HashMap<>();
+    private boolean handleCustomControlOnTouch(View view, MotionEvent e) {
+        HashSet<Integer> nowPointers = new HashSet<>();
+        List<Integer> purgeList = new ArrayList<>(4);
+        boolean didSomething = false;
+
+        synchronized (activePointers) {
+            // look at all the pointers that are represented in this event (still alive)
+            for (int i = 0; i < e.getPointerCount(); ++i) {
+                Integer id = e.getPointerId(i);
+                int x = (int)e.getX(i);
+                int y = (int)e.getY(i);
+
+                PointerInfo continuedControl = activePointers.get(id);
+                nowPointers.add(id);
+
+                // if it's not in the active pointers map, it's a new touch down event
+                if (continuedControl == null) {
+                    for (int j = customControls.size() - 1; j >= 0; --j) { // find the first thing we clicked (iterate backwards because we draw forwards, so back is on top layer)
+                        ICustomControl target = customControls.get(j);
+                        if (target.containsPoint(x, y)) {
+                            try { target.handleMouseDown(view, this, x, y); }
+                            catch (Exception ignored) {}
+
+                            activePointers.put(id, new PointerInfo(target, x, y));
+                            didSomething = true;
+                            break;
+                        }
+                    }
+                }
+                // otherwise we are continuing an ongoing touch event
+                else if (continuedControl.isNewPoint(x, y)) {
+                    try { continuedControl.target.handleMouseMove(view, this, x, y); }
+                    catch (Exception ignored) {}
+
+                    didSomething = true;
+                }
+            }
+
+            // if we had a mouse up event, remove that cursor from nowPointers so it will be properly purged
+            if (e.getActionMasked() == MotionEvent.ACTION_UP) {
+                nowPointers.remove(e.getPointerId(e.getActionIndex()));
+            }
+
+            // now look at all the pointers we were keeping track of and remove any that have ended (and raise a mouse up event)
+            for (Integer key : activePointers.keySet()) {
+                if (!nowPointers.contains(key)) purgeList.add(key);
+            }
+            // we have to remove them after loop to avoid modification during iteration
+            for (Integer key : purgeList) {
+                PointerInfo info = activePointers.remove(key);
+                didSomething = true;
+
+                try { info.target.handleMouseUp(view, this); }
+                catch (Exception ignored) {}
             }
         }
 
-        return false;
+        if (didSomething) redrawCustomControls(false);
+
+        return true;
     }
 
     private Bitmap getDefaultImage() {
@@ -901,6 +1000,8 @@ public class MainActivity extends AppCompatActivity {
 
     private String reconnectRequest = null;
     private final List<DatagramPacket> pipeQueue = new ArrayList<>();
+
+    private final Handler handler = new Handler();
 
     // schedules a new toast to be shown for the given duration - this works from any calling thread
     private void scheduleToast(String msg, int duration) {
@@ -1459,13 +1560,17 @@ public class MainActivity extends AppCompatActivity {
 
         startSensors();
 
+        tryAddCustomControl(new CustomButton(50, 50, 200, 100, Color.BLUE, Color.WHITE, new byte[] {'g', 'd'}, "push"));
+        tryAddCustomControl(new CustomButton(300, 50, 200, 100, Color.BLUE, Color.WHITE, new byte[] {'g', 'D'}, "push"));
+        tryAddCustomControl(new CustomButton(50, 200, 200, 100, Color.BLUE, Color.WHITE, new byte[] {'g', 'd', 'e'}, "push"));
+        tryAddCustomControl(new CustomButton(300, 200, 200, 100, Color.BLUE, Color.WHITE, new byte[] {'f', 'd'}, "push"));
+
         // --------------------------------------------------
 
         ImageView controlsView = findViewById(R.id.controlPanel);
         controlsView.setOnTouchListener((v, e) -> handleCustomControlOnTouch(v, e));
 
         // repeat canvas redraw until first success (we need to wait for control constraints to resolve to get size)
-        Handler handler = new Handler();
         new Runnable() {
             @Override
             public void run() {
