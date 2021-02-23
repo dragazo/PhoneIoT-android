@@ -356,6 +356,16 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
+    boolean ellipseContains(RectF ellipse, float x, float y) {
+        float rx = ellipse.width() / 2f;
+        float ry = ellipse.height() / 2f;
+        float offx = x - (ellipse.left + rx);
+        float offy = y - (ellipse.top + ry);
+        return (offx * offx) / (rx * rx) + (offy * offy) / (ry * ry) <= 1;
+    }
+
+    // ----------------------------------------------
+
     private interface ICustomControl {
         byte[] getID();
         void draw(Canvas canvas, Paint paint);
@@ -379,15 +389,19 @@ public class MainActivity extends AppCompatActivity {
         void setText(String newtext);
     }
 
+    private enum ButtonStyle {
+        Rect, Ellipse,
+    }
     private class CustomButton implements ICustomControl, IToggleable, ITextLike {
         private int posx, posy, width, height;
         private int color, textColor;
         private final byte[] id;
         private String text;
+        private ButtonStyle style;
 
         private boolean pressed = false;
 
-        public CustomButton(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text) {
+        public CustomButton(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text, ButtonStyle style) {
             this.posx = posx;
             this.posy = posy;
             this.width = width;
@@ -396,19 +410,25 @@ public class MainActivity extends AppCompatActivity {
             this.textColor = textColor;
             this.id = id;
             this.text = text;
+            this.style = style;
         }
 
         @Override
         public byte[] getID() { return id; }
+        private void drawRegion(Canvas canvas, Paint paint, RectF rect) {
+            if (style == ButtonStyle.Rect) canvas.drawRect(rect, paint);
+            else canvas.drawArc(rect, 0, 360, false, paint);
+        }
         @Override
         public void draw(Canvas canvas, Paint paint) {
             paint.setColor(color);
             paint.setStyle(Paint.Style.FILL);
-            canvas.drawRect(posx, posy, posx + width, posy + height, paint);
+            RectF rect = new RectF(posx, posy, posx + width, posy + height);
+            drawRegion(canvas, paint, rect);
 
             if (pressed) {
                 paint.setColor(Color.argb(100, 255, 255, 255));
-                canvas.drawRect(posx, posy, posx + width, posy + height, paint);
+                drawRegion(canvas, paint, rect);
             }
 
             Rect textBounds = new Rect();
@@ -421,7 +441,9 @@ public class MainActivity extends AppCompatActivity {
         
         @Override
         public boolean containsPoint(int x, int y) {
-            return x >= posx && y >= posy && x <= posx + width && y <= posy + height;
+            RectF rect = new RectF(posx, posy, posx + width, posy + height);
+            if (style == ButtonStyle.Rect) return rect.contains(x, y);
+            else return ellipseContains(rect, x, y);
         }
         @Override
         public void handleMouseDown(View view, MainActivity context, int x, int y) {
@@ -937,6 +959,7 @@ public class MainActivity extends AppCompatActivity {
         Bitmap img = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(img);
         Paint paint = new Paint();
+        paint.setAntiAlias(true);
         paint.setColor(Color.RED);
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(10);
@@ -1282,24 +1305,34 @@ public class MainActivity extends AppCompatActivity {
                                 break;
                             }
                             case 'B': { // add custom button control
-                                if (packet.getLength() < 34) continue;
-                                float x = floatFromBEBytes(buf, 9);
-                                float y = floatFromBEBytes(buf, 13);
-                                float width = floatFromBEBytes(buf, 17);
-                                float height = floatFromBEBytes(buf, 21);
-                                int color = intFromBEBytes(buf, 25);
-                                int textColor = intFromBEBytes(buf, 29);
-                                int idlen = (int)buf[33] & 0xff;
-                                if (packet.getLength() < 34 + idlen) continue;
-                                byte[] id = Arrays.copyOfRange(buf, 34, 34 + idlen);
-                                String text = new String(buf, 34 + idlen, packet.getLength() - (34 + idlen), "UTF-8");
+                                if (packet.getLength() < 35) continue;
 
                                 ImageView view = findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth(), viewHeight = view.getHeight();
+
+                                float x = floatFromBEBytes(buf, 9);
+                                float y = floatFromBEBytes(buf, 13);
+                                int width = (int)(floatFromBEBytes(buf, 17) / 100 * viewWidth);
+                                int height = (int)(floatFromBEBytes(buf, 21) / 100 * viewHeight);
+                                int color = intFromBEBytes(buf, 25);
+                                int textColor = intFromBEBytes(buf, 29);
+                                ButtonStyle style;
+                                switch (buf[33]) {
+                                    case 0: default: style = ButtonStyle.Rect; break;
+                                    case 1: style = ButtonStyle.Ellipse; break;
+                                    case 2: height = width; style = ButtonStyle.Rect; break; // these are just like previous, but make perfect squares/circles based on width only
+                                    case 3: height = width; style = ButtonStyle.Ellipse; break;
+                                }
+                                int idlen = (int)buf[34] & 0xff;
+                                if (packet.getLength() < 35 + idlen) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 35, 35 + idlen);
+                                String text = new String(buf, 35 + idlen, packet.getLength() - (35 + idlen), "UTF-8");
+
+
                                 ICustomControl control = new CustomButton(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
-                                        (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
-                                        color, textColor, id, text);
+                                        width, height,
+                                        color, textColor, id, text, style);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
