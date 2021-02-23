@@ -455,6 +455,7 @@ public class MainActivity extends AppCompatActivity {
         private int color;
         private final byte[] id;
 
+        private int timeIndex = 0; // time index for sending update events (used to ensure they don't receive them out of order)
         private float stickX = 0, stickY = 0; // these are [0, 1] values, which we scale up for the display
         private static final float STICK_SIZE = 0.3333f;
 
@@ -493,6 +494,11 @@ public class MainActivity extends AppCompatActivity {
             if (dist > radius) { x *= radius / dist; y *= radius / dist; } // if it's too far away, point in the right direction but put it in bounds
             stickX = (float)(x / radius);
             stickY = (float)(y / radius);
+            sendEvent();
+        }
+        private void sendEvent() {
+            try { netsbloxSend(ByteBuffer.allocate(13 + id.length).put((byte)'K').putInt(timeIndex++).putFloat(stickX).putFloat(stickY).put(id).array(), netsbloxAddress); }
+            catch (Exception ignored) {}
         }
         @Override
         public void handleMouseDown(View view, MainActivity context, int x, int y) {
@@ -502,7 +508,7 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void handleMouseMove(View view, MainActivity context, int x, int y) { updateStick(x, y); }
         @Override
-        public void handleMouseUp(View view, MainActivity context) { stickX = 0; stickY = 0; }
+        public void handleMouseUp(View view, MainActivity context) { stickX = 0; stickY = 0; sendEvent(); }
 
         @Override
         public float[] getVector() {
