@@ -20,7 +20,6 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.location.Location;
-import android.location.LocationListener;
 import android.media.ExifInterface;
 import android.media.MediaRecorder;
 import android.net.Uri;
@@ -368,6 +367,9 @@ public class MainActivity extends AppCompatActivity {
     private interface IToggleable extends ICustomControl {
         boolean getToggleState();
     }
+    private interface IJoystickLike extends ICustomControl {
+        float[] getVector();
+    }
     private interface IImageLike extends ICustomControl {
         Bitmap getImage();
         void setImage(Bitmap newimg, boolean recycleOld);
@@ -377,14 +379,13 @@ public class MainActivity extends AppCompatActivity {
         void setText(String newtext);
     }
 
-    private class CustomButton implements ICustomControl, ITextLike {
+    private class CustomButton implements ICustomControl, IToggleable, ITextLike {
         private int posx, posy, width, height;
         private int color, textColor;
         private final byte[] id;
         private String text;
 
-        private boolean touchColor = false;
-        private static final long TOUCH_COLOR_DURATION = 200;
+        private boolean pressed = false;
 
         public CustomButton(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text) {
             this.posx = posx;
@@ -405,7 +406,7 @@ public class MainActivity extends AppCompatActivity {
             paint.setStyle(Paint.Style.FILL);
             canvas.drawRect(posx, posy, posx + width, posy + height, paint);
 
-            if (touchColor) {
+            if (pressed) {
                 paint.setColor(Color.argb(100, 255, 255, 255));
                 canvas.drawRect(posx, posy, posx + width, posy + height, paint);
             }
@@ -429,14 +430,17 @@ public class MainActivity extends AppCompatActivity {
 
             view.playSoundEffect(SoundEffectConstants.CLICK);
 
-            touchColor = true;
+            pressed = true;
         }
         @Override
         public void handleMouseMove(View view, MainActivity context, int x, int y) { }
         @Override
         public void handleMouseUp(View view, MainActivity context) {
-            touchColor = false;
+            pressed = false;
         }
+
+        @Override
+        public boolean getToggleState() { return pressed; }
 
         @Override
         public String getText() { return text; }
@@ -444,6 +448,65 @@ public class MainActivity extends AppCompatActivity {
         public void setText(String text) {
             this.text = text;
             redrawCustomControls(false);
+        }
+    }
+    private class CustomJoystick implements ICustomControl, IJoystickLike {
+        private int posx, posy, width;
+        private int color;
+        private final byte[] id;
+
+        private float stickX = 0, stickY = 0; // these are [0, 1] values, which we scale up for the display
+        private static final float STICK_SIZE = 0.3333f;
+
+        public CustomJoystick(int posx, int posy, int width, int color, byte[] id) {
+            this.posx = posx;
+            this.posy = posy;
+            this.width = width;
+            this.color = color;
+            this.id = id;
+        }
+
+        @Override
+        public byte[] getID() { return id; }
+        @Override
+        public void draw(Canvas canvas, Paint paint) {
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(4f, 0.035f * width));
+            canvas.drawArc(new RectF(posx, posy, posx + width, posy + width), 0, 360, false, paint);
+
+            float stick1 = posx + (stickX + 1f - STICK_SIZE) * (width / 2f);
+            float stick2 = posy + (stickY + 1f - STICK_SIZE) * (width / 2f);
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawArc(new RectF(stick1, stick2, stick1 + width * STICK_SIZE, stick2 + width * STICK_SIZE), 0, 360, false, paint);
+        }
+
+        @Override
+        public boolean containsPoint(int x, int y) {
+            return x >= posx && y >= posy && x <= posx + width && y <= posy + width;
+        }
+        private void updateStick(double x, double y) {
+            double radius = width / 2.0;
+            x -= posx + radius;
+            y -= posy + radius;
+            double dist = Math.sqrt(x * x + y * y);
+            if (dist > radius) { x *= radius / dist; y *= radius / dist; } // if it's too far away, point in the right direction but put it in bounds
+            stickX = (float)(x / radius);
+            stickY = (float)(y / radius);
+        }
+        @Override
+        public void handleMouseDown(View view, MainActivity context, int x, int y) {
+            view.playSoundEffect(SoundEffectConstants.CLICK);
+            updateStick(x, y);
+        }
+        @Override
+        public void handleMouseMove(View view, MainActivity context, int x, int y) { updateStick(x, y); }
+        @Override
+        public void handleMouseUp(View view, MainActivity context) { stickX = 0; stickY = 0; }
+
+        @Override
+        public float[] getVector() {
+            return new float[] { stickX, stickY };
         }
     }
     private class CustomImageBox implements ICustomControl, IImageLike {
@@ -909,7 +972,7 @@ public class MainActivity extends AppCompatActivity {
             this.lastY = y;
         }
         public boolean isNewPoint(int x, int y) {
-            return (x != lastX || y != lastY) && target.containsPoint(x, y);
+            return x != lastX || y != lastY;
         }
     }
     private final HashMap<Integer, PointerInfo> activePointers = new HashMap<>();
@@ -933,11 +996,19 @@ public class MainActivity extends AppCompatActivity {
                     for (int j = customControls.size() - 1; j >= 0; --j) { // find the first thing we clicked (iterate backwards because we draw forwards, so back is on top layer)
                         ICustomControl target = customControls.get(j);
                         if (target.containsPoint(x, y)) {
-                            try { target.handleMouseDown(view, this, x, y); }
-                            catch (Exception ignored) {}
+                            boolean good = true;
+                            for (PointerInfo info : activePointers.values()) { // check if there's already a pointer active on the given target
+                                if (info.target != target) continue;
+                                good = false;
+                                break;
+                            }
+                            if (good) { // only do something if there's not another pointer for the same target
+                                try { target.handleMouseDown(view, this, x, y); }
+                                catch (Exception ignored) {}
 
-                            activePointers.put(id, new PointerInfo(target, x, y));
-                            didSomething = true;
+                                activePointers.put(id, new PointerInfo(target, x, y));
+                                didSomething = true;
+                            }
                             break;
                         }
                     }
@@ -951,8 +1022,9 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
 
-            // if we had a mouse up event, remove that cursor from nowPointers so it will be properly purged
-            if (e.getActionMasked() == MotionEvent.ACTION_UP) {
+            // if we had an up event (up or pointer up), remove that cursor from nowPointers so it will be properly purged
+            int action = e.getActionMasked();
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
                 nowPointers.remove(e.getPointerId(e.getActionIndex()));
             }
 
@@ -1164,6 +1236,17 @@ public class MainActivity extends AppCompatActivity {
                                 }
                                 break;
                             }
+                            case 'J': { // get joystick vector
+                                if (packet.getLength() < 9) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
+                                IJoystickLike target = (IJoystickLike)getCustomControlWithIDWhere(id, c -> c instanceof IJoystickLike);
+                                if (target == null) netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
+                                else {
+                                    float[] vec = target.getVector();
+                                    netsbloxSend(ByteBuffer.allocate(9).put(buf[0]).putFloat(vec[0]).putFloat(vec[1]).array(), packet.getSocketAddress());
+                                }
+                                break;
+                            }
                             case 'W': { // get toggle state
                                 if (packet.getLength() < 9) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
@@ -1211,6 +1294,23 @@ public class MainActivity extends AppCompatActivity {
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
                                         color, textColor, id, text);
+                                netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
+                                break;
+                            }
+                            case 'j': { // add custom joystick control
+                                if (packet.getLength() < 25) continue;
+                                float x = floatFromBEBytes(buf, 9);
+                                float y = floatFromBEBytes(buf, 13);
+                                float width = floatFromBEBytes(buf, 17);
+                                int color = intFromBEBytes(buf, 21);
+                                byte[] id = Arrays.copyOfRange(buf, 25, packet.getLength());
+
+                                ImageView view = findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth(), viewHeight = view.getHeight();
+                                ICustomControl control = new CustomJoystick(
+                                        (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
+                                        (int)(width / 100 * viewWidth),
+                                        color, id);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
@@ -1559,11 +1659,6 @@ public class MainActivity extends AppCompatActivity {
         // --------------------------------------------------
 
         startSensors();
-
-        tryAddCustomControl(new CustomButton(50, 50, 200, 100, Color.BLUE, Color.WHITE, new byte[] {'g', 'd'}, "push"));
-        tryAddCustomControl(new CustomButton(300, 50, 200, 100, Color.BLUE, Color.WHITE, new byte[] {'g', 'D'}, "push"));
-        tryAddCustomControl(new CustomButton(50, 200, 200, 100, Color.BLUE, Color.WHITE, new byte[] {'g', 'd', 'e'}, "push"));
-        tryAddCustomControl(new CustomButton(300, 200, 200, 100, Color.BLUE, Color.WHITE, new byte[] {'f', 'd'}, "push"));
 
         // --------------------------------------------------
 
