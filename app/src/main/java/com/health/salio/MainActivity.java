@@ -114,8 +114,8 @@ public class MainActivity extends AppCompatActivity {
     // ------------------------------------
 
     private class SensorInfo implements SensorEventListener, BasicSensor {
-        public Sensor sensor;
-        public double[] data;
+        public final Sensor sensor;
+        public final double[] data;
         public boolean supported;
 
         public SensorInfo(Sensor s, int dims) {
@@ -284,14 +284,17 @@ public class MainActivity extends AppCompatActivity {
             new Runnable() {
                 @Override
                 public void run() {
-                    try { data[0] = (float)recorder.getMaxAmplitude() / NORMALIZATION_FACTOR; }
-                    catch (Exception ignore) { }
+                    if (supported) {
+                        try { data[0] = (float) recorder.getMaxAmplitude() / NORMALIZATION_FACTOR; }
+                        catch (Exception ignore) { }
+                    }
                     handler.postDelayed(this, SAMPLE_RATE);
                 }
             }.run();
         }
         public void start() {
             try {
+                recorder.reset();
                 recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
                 recorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP);
                 recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
@@ -305,7 +308,10 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         public void stop() {
-            recorder.stop();
+            if (supported) {
+                try { recorder.stop(); }
+                catch (Exception ignored) { }
+            }
         }
 
         @Override
