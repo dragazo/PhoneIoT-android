@@ -292,19 +292,30 @@ public class MainActivity extends AppCompatActivity {
                 }
             }.run();
         }
-        public void start() {
+        public void start(Context context) {
             try {
                 recorder.reset();
                 recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
                 recorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP);
                 recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
-                recorder.setOutputFile("/dev/null"); // important: we don't want to save the recording (esp. since we never stop recording)
+
+                // time for a little rant...
+                // Android 11 (maybe also 10) added more restrictions on file access among apps, relegating them to their own little sandboxes
+                // that's all well and good, but now /dev/null is inaccessible, and they didn't think to add any alternative...
+                // so we actually have to SAVE all this garbage to a temporary file and just delete it on exit...
+
+                File res = File.createTempFile("_media_recorder_dump_", null, context.getFilesDir());
+                res.deleteOnExit(); // for some reason createTempFile doesn't do this automatically... what's even the point? who knows...
+                System.err.printf("generated media file: %s\n", res);
+
+                recorder.setOutputFile(res.getAbsolutePath());
                 recorder.prepare();
                 recorder.start();
                 supported = true;
             }
-            catch (Exception ignored) {
+            catch (Exception ex) {
                 supported = false;
+                ex.printStackTrace();
             }
         }
         public void stop() {
@@ -1179,8 +1190,6 @@ public class MainActivity extends AppCompatActivity {
                         udpSocket.setSoTimeout(1000);
                         udpSocket.receive(packet);
 
-                        System.err.printf("packet: %d with prefix %s = %d\n", packet.getLength(), (char)buf[0], (int)buf[0] & 0xff);
-
                         // check for things that don't need auth
                         if (packet.getLength() == 1 && buf[0] == 'I') { // connection acknowledgment
                             scheduleToast("connected to server", Toast.LENGTH_SHORT);
@@ -1604,7 +1613,7 @@ public class MainActivity extends AppCompatActivity {
         relativeHumidity.start();
 
         // misc sensors
-        soundSensor.start();
+        soundSensor.start(this);
         location.start();
     }
     private void stopSensors() {
