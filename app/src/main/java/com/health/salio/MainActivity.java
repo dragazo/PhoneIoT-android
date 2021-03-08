@@ -35,6 +35,8 @@ import android.text.TextPaint;
 import android.view.MotionEvent;
 import android.view.SoundEffectConstants;
 import android.view.View;
+import android.widget.ArrayAdapter;
+import android.widget.AutoCompleteTextView;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.TextView;
@@ -45,6 +47,8 @@ import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
+import androidx.core.view.GravityCompat;
+import androidx.drawerlayout.widget.DrawerLayout;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
@@ -55,6 +59,7 @@ import com.google.android.gms.location.LocationSettingsRequest;
 import com.google.android.gms.location.LocationSettingsResponse;
 import com.google.android.gms.location.SettingsClient;
 import com.google.android.gms.tasks.Task;
+import com.google.android.material.navigation.NavigationView;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -337,6 +342,12 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
+    private View getNavigationView(int id) {
+        NavigationView nav = findViewById(R.id.navigationView);
+        View view = nav.getHeaderView(0);
+        return view.findViewById(id);
+    }
+
     private static final long PASSWORD_EXPIRY_INTERVAL = 1 * 1000 * 60 * 60 * 24; // expire after one day
 
     private long _rawPassword = 0;
@@ -351,8 +362,8 @@ public class MainActivity extends AppCompatActivity {
     private void setPassword(long pass) {
         _rawPassword = pass;
         _passwordExpiry = System.currentTimeMillis() + PASSWORD_EXPIRY_INTERVAL;
-        TextView text = findViewById(R.id.authText);
-        text.setText(String.format("password: %016x", _rawPassword));
+        TextView text = (TextView)getNavigationView(R.id.authText);
+        text.setText(String.format("Password: %016x", _rawPassword));
     }
     private void invalidatePassword() {
         _passwordExpiry = 0;
@@ -977,12 +988,7 @@ public class MainActivity extends AppCompatActivity {
         Canvas canvas = new Canvas(img);
         Paint paint = new Paint();
         paint.setAntiAlias(true);
-        paint.setColor(Color.RED);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(10);
         paint.setTextSize(50 * ((float)height / 1200));
-        canvas.drawRect(0, 0, img.getWidth(), img.getHeight(), paint);
-
         for (ICustomControl control : customControls) {
             control.draw(canvas, paint);
         }
@@ -1121,6 +1127,10 @@ public class MainActivity extends AppCompatActivity {
 
     private final Handler handler = new Handler();
 
+    private static final String[] KNOWN_SERVERS = new String[] {
+            "24.11.247.254", "editor.netsblox.org", "dev.netsblox.org",
+    };
+
     // schedules a new toast to be shown for the given duration - this works from any calling thread
     private void scheduleToast(String msg, int duration) {
         this.runOnUiThread(() -> Toast.makeText(this, msg, duration).show());
@@ -1144,7 +1154,7 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        reconnectRequest = ((EditText)findViewById(R.id.serverHostText)).getText().toString();
+        reconnectRequest = ((EditText)getNavigationView(R.id.serverHostText)).getText().toString();
 
         if (udpServerThread == null) {
             udpServerThread = new Thread(() -> {
@@ -1617,7 +1627,7 @@ public class MainActivity extends AppCompatActivity {
         location.start();
     }
     private void stopSensors() {
-        synchronized(sensorsRunning) {
+        synchronized (sensorsRunning) {
             if (!sensorsRunning[0]) return;
             sensorsRunning[0] = false;
         }
@@ -1671,14 +1681,20 @@ public class MainActivity extends AppCompatActivity {
             for (int i = 5; i >= 0; --i, macInt >>= 8) macAddress[i] = (byte)macInt;
         }
 
-        TextView title = findViewById(R.id.titleText);
+        TextView title = (TextView)getNavigationView(R.id.titleText);
         StringBuilder b = new StringBuilder(32);
-        b.append("PhoneIoT - ");
+        b.append("Device ID: ");
         appendBytes(b, macAddress);
         title.setText(b.toString());
 
         //invalidatePassword();
         setPassword(0); // for development purposes
+
+        ArrayAdapter<String> completionAdapter = new ArrayAdapter<>(this, android.R.layout.select_dialog_item, KNOWN_SERVERS);
+        AutoCompleteTextView serverBox = (AutoCompleteTextView)getNavigationView(R.id.serverHostText);
+        serverBox.setThreshold(1);
+        serverBox.setAdapter(completionAdapter);
+        serverBox.setText(KNOWN_SERVERS[0]); // auto fill in the first option
 
         // --------------------------------------------------
 
@@ -1831,8 +1847,12 @@ public class MainActivity extends AppCompatActivity {
     // ------------------------------------------------------------------------------
 
     public void serverConnectButtonPress(View view) {
-        findViewById(R.id.serverHostText).clearFocus(); // do this so we don't have a blinking cursor for all of eternity
+        getNavigationView(R.id.serverHostText).clearFocus(); // do this so we don't have a blinking cursor for all of eternity
         connectToServer();
+    }
+    public void openDrawerButton(View view) {
+        DrawerLayout nav = findViewById(R.id.drawerLayout);
+        nav.openDrawer(GravityCompat.START);
     }
     public void newPasswordButtonClick(View view) {
         new AlertDialog.Builder(this)
