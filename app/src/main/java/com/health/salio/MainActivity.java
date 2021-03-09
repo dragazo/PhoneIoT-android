@@ -39,8 +39,10 @@ import android.widget.ArrayAdapter;
 import android.widget.AutoCompleteTextView;
 import android.widget.EditText;
 import android.widget.ImageView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.ToggleButton;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -62,6 +64,7 @@ import com.google.android.gms.tasks.Task;
 import com.google.android.material.navigation.NavigationView;
 
 import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.net.DatagramPacket;
@@ -113,7 +116,6 @@ public class MainActivity extends AppCompatActivity {
     private interface BasicSensor {
         boolean isSupported();
         double[] getData();
-        void calculate();
     }
 
     // ------------------------------------
@@ -151,8 +153,6 @@ public class MainActivity extends AppCompatActivity {
         public boolean isSupported() { return supported; }
         @Override
         public double[] getData() { return data; }
-        @Override
-        public void calculate() { }
     }
 
     // ----------------------------------------------
@@ -200,9 +200,7 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public boolean isSupported() { return accel.isSupported() && magnet.isSupported(); }
         @Override
-        public double[] getData() { return data; }
-        @Override
-        public void calculate() {
+        public double[] getData() {
             for (int i = 0; i < 3; ++i) accelBuffer[i] = (float)accel.data[i];
             for (int i = 0; i < 3; ++i) magnetBuffer[i] = (float)magnet.data[i];
 
@@ -210,6 +208,8 @@ public class MainActivity extends AppCompatActivity {
             SensorManager.getOrientation(matrixBuffer, accelBuffer); // store into this buffer temporarily
 
             for (int i = 0; i < 3; ++i) data[i] = accelBuffer[i]; // an extract into real data array
+
+            return data;
         }
     }
 
@@ -268,8 +268,6 @@ public class MainActivity extends AppCompatActivity {
         public boolean isSupported() { return supported; }
         @Override
         public double[] getData() { return data; }
-        @Override
-        public void calculate() { }
     }
     private LocationSensor location;
 
@@ -334,8 +332,6 @@ public class MainActivity extends AppCompatActivity {
         public boolean isSupported() { return supported; }
         @Override
         public double[] getData() { return data; }
-        @Override
-        public void calculate() { }
     }
 
     private SoundSensor soundSensor;
@@ -569,14 +565,16 @@ public class MainActivity extends AppCompatActivity {
         private int posx, posy, width, height;
         private final byte[] id;
         private Bitmap img;
+        private boolean readonly;
 
-        public CustomImageBox(int posx, int posy, int width, int height, byte[] id, Bitmap img) {
+        public CustomImageBox(int posx, int posy, int width, int height, byte[] id, Bitmap img, boolean readonly) {
             this.posx = posx;
             this.posy = posy;
             this.width = width;
             this.height = height;
             this.id = id;
             this.img = img;
+            this.readonly = readonly;
         }
 
         @Override
@@ -606,6 +604,8 @@ public class MainActivity extends AppCompatActivity {
         }
         @Override
         public void handleMouseDown(View view, MainActivity context, int x, int y) {
+            if (readonly) return;
+
             view.playSoundEffect(SoundEffectConstants.CLICK);
             requestImageFor(this);
         }
@@ -629,10 +629,11 @@ public class MainActivity extends AppCompatActivity {
         private int color, textColor;
         private final byte[] id;
         private String text;
+        private boolean readonly;
 
         private static final int PADDING = 10;
 
-        public CustomTextField(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text) {
+        public CustomTextField(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text, boolean readonly) {
             this.posx = posx;
             this.posy = posy;
             this.width = width;
@@ -641,6 +642,7 @@ public class MainActivity extends AppCompatActivity {
             this.textColor = textColor;
             this.id = id;
             this.text = text;
+            this.readonly = readonly;
         }
 
         @Override
@@ -677,6 +679,8 @@ public class MainActivity extends AppCompatActivity {
         }
         @Override
         public void handleMouseDown(View view, MainActivity context, int x, int y) {
+            if (readonly) return;
+
             try {
                 view.playSoundEffect(SoundEffectConstants.CLICK);
 
@@ -988,7 +992,13 @@ public class MainActivity extends AppCompatActivity {
         Canvas canvas = new Canvas(img);
         Paint paint = new Paint();
         paint.setAntiAlias(true);
-        paint.setTextSize(50 * ((float)height / 1200));
+        paint.setTextSize(30 * ((float)height / 1200));
+
+        if (customControls.isEmpty()) { // if there aren't any controls, put a message to let them know it's intentionally empty
+            String msg = "Add controls through NetsBlox!";
+            float len = paint.measureText(msg);
+            canvas.drawText(msg, (width - len) / 2f, height / 2f, paint);
+        }
         for (ICustomControl control : customControls) {
             control.draw(canvas, paint);
         }
@@ -1108,6 +1118,9 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
+    private static final String MAC_ADDR_PREF_NAME = "MAC_ADDR"; // name to use for mac addr in stored app preferences
+    private static final String RUN_IN_BACKGROUND_PREF_NAME = "RUN_IN_BACKGROUND";
+
     private final Random rand = new Random();
 
     private static final int SERVER_PORT = 1976;
@@ -1115,11 +1128,11 @@ public class MainActivity extends AppCompatActivity {
     private SocketAddress netsbloxAddress = null; // target for heartbeat comms - can be changed at will
     private DatagramSocket udpSocket = null;      // our socket for udp comms - do not close or change it
 
-    private static final String MAC_ADDR_PREF_NAME = "MAC_ADDR"; // name to use for mac addr in stored app preferences
-    private byte[] macAddress = null;
+    private final byte[] macAddress = new byte[6];
 
     private Thread udpServerThread = null;
     private Thread pipeThread = null;
+    private Thread sensorStreamThread = null;
     private long next_heartbeat = 0;
 
     private String reconnectRequest = null;
@@ -1128,7 +1141,8 @@ public class MainActivity extends AppCompatActivity {
     private final Handler handler = new Handler();
 
     private static final String[] KNOWN_SERVERS = new String[] {
-            "24.11.247.254", "editor.netsblox.org", "dev.netsblox.org",
+            "24.11.247.254", "10.0.0.24", // temporary dev addresses
+            "editor.netsblox.org", "dev.netsblox.org",
     };
 
     // schedules a new toast to be shown for the given duration - this works from any calling thread
@@ -1197,6 +1211,7 @@ public class MainActivity extends AppCompatActivity {
                         }
 
                         // wait for a message - short duration is so we can see reconnections quickly
+                        // IMPORTANT: short timeout is also important for the sleep no-communications mode (otherwise we might leak one instruction through after arbitrary time).
                         udpSocket.setSoTimeout(1000);
                         udpSocket.receive(packet);
 
@@ -1212,7 +1227,6 @@ public class MainActivity extends AppCompatActivity {
                         final SensorConsumer handleSensor = src -> {
                             if (packet.getLength() != 9) return; // ignore invalid format
                             if (src.isSupported()) { // if the sensor is supported, send back all the content
-                                src.calculate(); // compute software-emulated logic (if any)
                                 double[] v = src.getData();
                                 ByteBuffer b = ByteBuffer.allocate(1 + v.length * 8).put(buf[0]);
                                 for (double val : v) b.putDouble(val);
@@ -1384,36 +1398,38 @@ public class MainActivity extends AppCompatActivity {
                                 float y = floatFromBEBytes(buf, 13);
                                 float width = floatFromBEBytes(buf, 17);
                                 float height = floatFromBEBytes(buf, 21);
-                                byte[] id = Arrays.copyOfRange(buf, 25, packet.getLength());
+                                boolean readonly = buf[25] != 0;
+                                byte[] id = Arrays.copyOfRange(buf, 26, packet.getLength());
 
                                 ImageView view = findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth(), viewHeight = view.getHeight();
                                 ICustomControl control = new CustomImageBox(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
-                                        id, getDefaultImage());
+                                        id, getDefaultImage(), readonly);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
-                            case 'T': { // add custom button control
-                                if (packet.getLength() < 34) continue;
+                            case 'T': { // add custom text field control
+                                if (packet.getLength() < 35) continue;
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 float width = floatFromBEBytes(buf, 17);
                                 float height = floatFromBEBytes(buf, 21);
                                 int color = intFromBEBytes(buf, 25);
                                 int textColor = intFromBEBytes(buf, 29);
-                                int idlen = (int)buf[33] & 0xff;
-                                if (packet.getLength() < 34 + idlen) continue;
-                                byte[] id = Arrays.copyOfRange(buf, 34, 34 + idlen);
-                                String text = new String(buf, 34 + idlen, packet.getLength() - (34 + idlen), "UTF-8");
+                                boolean readonly = buf[33] != 0;
+                                int idlen = (int)buf[34] & 0xff;
+                                if (packet.getLength() < 35 + idlen) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 35, 35 + idlen);
+                                String text = new String(buf, 35 + idlen, packet.getLength() - (35 + idlen), "UTF-8");
 
                                 ImageView view = findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth(), viewHeight = view.getHeight();
                                 ICustomControl control = new CustomTextField(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
-                                        color, textColor, id, text);
+                                        color, textColor, id, text, readonly);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
@@ -1512,6 +1528,48 @@ public class MainActivity extends AppCompatActivity {
             });
             pipeThread.start();
         }
+        if (sensorStreamThread == null) {
+            sensorStreamThread = new Thread(() -> {
+                int timestamp = 0;
+                while (true) {
+                    try {
+                        try { Thread.sleep(100); } catch (Exception ignored) { } // sleep some ammout of time but don't let failure stop us from doin the rest this iteration
+
+                        if ((timestamp & 127) == 0) { // we need to check the sensor shutdown flag, but only every now and then
+                            synchronized (sensorsRunning) {
+                                while (!sensorsRunning[0]) sensorsRunning.wait();
+                            }
+                        }
+                        netsbloxSend(getSensorPacket(new byte[]{'Q'}, timestamp++), netsbloxAddress);
+                    }
+                    catch (Exception ignored) { }
+                }
+            });
+            sensorStreamThread.start();
+        }
+    }
+    private byte[] getSensorPacket(byte[] prefix, int timestamp) {
+        try {
+            ByteArrayOutputStream raw = new ByteArrayOutputStream();
+            try (DataOutputStream writer = new DataOutputStream(raw)) {
+                BasicSensor[] sensors = {
+                        accelerometer, gravity, linearAcceleration, gyroscope, rotationVector, gameRotationVector,
+                        magneticField, soundSensor, proximity, stepCounter, light, location, orientationCalculator,
+                };
+                writer.write(prefix);
+                writer.writeInt(timestamp);
+                for (BasicSensor sensor : sensors) {
+                    if (sensor.isSupported()) {
+                        double[] vals = sensor.getData();
+                        writer.write((byte)vals.length);
+                        for (double v : vals) writer.writeDouble(v);
+                    }
+                    else writer.write((byte)0);
+                }
+            }
+            return raw.toByteArray();
+        }
+        catch (Exception ignored) { return new byte[0]; }
     }
     private byte[] netsbloxFormat(byte[] content) {
         byte[] expanded = new byte[content.length + 10];
@@ -1594,6 +1652,11 @@ public class MainActivity extends AppCompatActivity {
         finishInitialization();
     }
 
+    private boolean canRunInBackground() {
+        Switch toggle = (Switch)getNavigationView(R.id.runInBackgroundSwitch);
+        return toggle.isChecked();
+    }
+
     private final boolean[] sensorsRunning = new boolean[] { false };
     private void startSensors() {
         synchronized(sensorsRunning) {
@@ -1657,35 +1720,48 @@ public class MainActivity extends AppCompatActivity {
         location.stop();
     }
 
-    private boolean postInitializationComplete = false; // marks that we've finished everything and are ready for user interaction
-    private void finishInitialization() {
-        macAddress = new byte[6];
-        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+    private SharedPreferences _prefs;
+    private SharedPreferences getPrefs() {
+        if (_prefs != null) return _prefs;
+        _prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+        return _prefs;
+    }
+    private void loadPrefId() {
         long macInt = -1;
-        try {
-            macInt = prefs.getLong(MAC_ADDR_PREF_NAME, -1);
-        }
-        catch (Exception ex) {
-            Toast.makeText(this, ex.toString(), Toast.LENGTH_LONG).show();
-        }
+        try { macInt = getPrefs().getLong(MAC_ADDR_PREF_NAME, -1); }
+        catch (Exception ignored) { }
         if (macInt < 0) {
             rand.nextBytes(macAddress); // generate a random fake mac addr (new versions of android no longer support getting the real one)
 
             // cache the generated value in preferences (so multiple application starts have the same id)
             macInt = 0;
             for (byte b : macAddress) macInt = (macInt << 8) | ((long)b & 0xff); // convert array to int
-            prefs.edit().putLong(MAC_ADDR_PREF_NAME, macInt).apply();
+            getPrefs().edit().putLong(MAC_ADDR_PREF_NAME, macInt).apply();
         }
         else {
             // convert int to array
             for (int i = 5; i >= 0; --i, macInt >>= 8) macAddress[i] = (byte)macInt;
         }
 
-        TextView title = (TextView)getNavigationView(R.id.titleText);
+        TextView title = (TextView)getNavigationView(R.id.idText);
         StringBuilder b = new StringBuilder(32);
         b.append("Device ID: ");
         appendBytes(b, macAddress);
         title.setText(b.toString());
+    }
+    void loadPrefRunInBackground() {
+        boolean res = false;
+        try { res = getPrefs().getBoolean(RUN_IN_BACKGROUND_PREF_NAME, false); }
+        catch (Exception ignored) { }
+
+        Switch toggle = (Switch)getNavigationView(R.id.runInBackgroundSwitch);
+        toggle.setChecked(res);
+    }
+
+    private boolean postInitializationComplete = false; // marks that we've finished everything and are ready for user interaction
+    private void finishInitialization() {
+        loadPrefId();
+        loadPrefRunInBackground();
 
         //invalidatePassword();
         setPassword(0); // for development purposes
@@ -1694,7 +1770,7 @@ public class MainActivity extends AppCompatActivity {
         AutoCompleteTextView serverBox = (AutoCompleteTextView)getNavigationView(R.id.serverHostText);
         serverBox.setThreshold(1);
         serverBox.setAdapter(completionAdapter);
-        serverBox.setText(KNOWN_SERVERS[0]); // auto fill in the first option
+        serverBox.setText(KNOWN_SERVERS[1]); // auto fill in the first option
 
         // --------------------------------------------------
 
@@ -1762,7 +1838,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
-        if (postInitializationComplete) stopSensors();
+        if (postInitializationComplete && !canRunInBackground()) stopSensors();
         System.err.println("pausing");
     }
 
@@ -1862,5 +1938,19 @@ public class MainActivity extends AppCompatActivity {
                 .setPositiveButton(android.R.string.yes, (d, w) -> invalidatePassword())
                 .setNegativeButton(android.R.string.no, null)
                 .show();
+    }
+    public void runInBackgroundSwitchClick(View view) {
+        Switch toggle = (Switch)view;
+        boolean on = toggle.isChecked();
+        getPrefs().edit().putBoolean(RUN_IN_BACKGROUND_PREF_NAME, on).apply();
+
+        if (on) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Info")
+                    .setMessage("To fully run in the background, you may need to disable battery optimizations for PhoneIoT. Additionally, some versions of Android limit access to sensors while in the background.")
+                    .setIcon(android.R.drawable.ic_dialog_info)
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show();
+        }
     }
 }

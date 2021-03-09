@@ -14,18 +14,20 @@
         android:layout_height="wrap_content"
         android:text="PhoneIoT"
         android:gravity="center|fill_vertical"
-        android:textAppearance="@style/TextAppearance.AppCompat.Large"/>
+        android:textAppearance="@style/TextAppearance.AppCompat.Large" />
 
     <TextView
-        android:id="@+id/titleText"
+        android:id="@+id/idText"
         android:gravity="center|fill_vertical"
         android:layout_height="wrap_content"
-        android:layout_width="match_parent" />
+        android:layout_width="match_parent"
+        android:text="ID PLACEHOLDER"/>
     <TextView
         android:id="@+id/authText"
         android:gravity="center|fill_vertical"
         android:layout_height="wrap_content"
-        android:layout_width="match_parent" />
+        android:layout_width="match_parent"
+        android:text="PASSWORD PLACEHOLDER"/>
 
     <Space
         android:layout_width="match_parent"
@@ -50,6 +52,29 @@
         android:layout_height="wrap_content"
         android:onClick="serverConnectButtonPress"
         android:text="Connect" />
+
+    <Space
+        android:layout_width="match_parent"
+        android:layout_height="30dp" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content">
+        <Switch
+            android:id="@+id/runInBackgroundSwitch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:onClick="runInBackgroundSwitchClick"/>
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:gravity="center|fill_vertical"
+            android:text="Run in background"/>
+    </LinearLayout>
+
+    <Space
+        android:layout_width="match_parent"
+        android:layout_height="30dp" />
 
     <Button
         android:id="@+id/updateAuthButton"
