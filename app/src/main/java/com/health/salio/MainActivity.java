@@ -392,7 +392,7 @@ public class MainActivity extends AppCompatActivity {
 
     private interface ICustomControl {
         byte[] getID();
-        void draw(Canvas canvas, Paint paint);
+        void draw(Canvas canvas, Paint paint, float baseFontSize);
         boolean containsPoint(int x, int y);
         void handleMouseDown(View view, MainActivity context, int x, int y);
         void handleMouseMove(View view, MainActivity context, int x, int y);
@@ -421,11 +421,13 @@ public class MainActivity extends AppCompatActivity {
         private int color, textColor;
         private final byte[] id;
         private String text;
+        private float fontSize;
         private ButtonStyle style;
+        private boolean landscape;
 
         private boolean pressed = false;
 
-        public CustomButton(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text, ButtonStyle style) {
+        public CustomButton(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text, float fontSize, ButtonStyle style, boolean landscape) {
             this.posx = posx;
             this.posy = posy;
             this.width = width;
@@ -434,7 +436,9 @@ public class MainActivity extends AppCompatActivity {
             this.textColor = textColor;
             this.id = id;
             this.text = text;
+            this.fontSize = fontSize;
             this.style = style;
+            this.landscape = landscape;
         }
 
         @Override
@@ -444,10 +448,15 @@ public class MainActivity extends AppCompatActivity {
             else canvas.drawArc(rect, 0, 360, false, paint);
         }
         @Override
-        public void draw(Canvas canvas, Paint paint) {
+        public void draw(Canvas canvas, Paint paint, float baseFontSize) {
+            canvas.save();
+            canvas.translate(posx, posy);
+            if (landscape) canvas.rotate(90);
+
             paint.setColor(color);
             paint.setStyle(Paint.Style.FILL);
-            RectF rect = new RectF(posx, posy, posx + width, posy + height);
+            paint.setTextSize(baseFontSize * fontSize);
+            RectF rect = new RectF(0, 0, width, height);
             drawRegion(canvas, paint, rect);
 
             if (pressed) {
@@ -460,12 +469,14 @@ public class MainActivity extends AppCompatActivity {
 
             paint.setColor(textColor);
             paint.setTextAlign(Paint.Align.CENTER);
-            canvas.drawText(text, posx + (float)width / 2, posy + ((float)height + textBounds.height() - 4) / 2, paint);
+            canvas.drawText(text, width / 2f, (height + textBounds.height() - 4) / 2f, paint);
+
+            canvas.restore();
         }
         
         @Override
         public boolean containsPoint(int x, int y) {
-            RectF rect = new RectF(posx, posy, posx + width, posy + height);
+            RectF rect = landscape ? new RectF(posx - height, posy, posx, posy + width) : new RectF(posx, posy, posx + width, posy + height);
             if (style == ButtonStyle.Rect) return rect.contains(x, y);
             else return ellipseContains(rect, x, y);
         }
@@ -500,23 +511,28 @@ public class MainActivity extends AppCompatActivity {
         private int posx, posy, width;
         private int color;
         private final byte[] id;
+        private boolean landscape;
 
         private int timeIndex = 0; // time index for sending update events (used to ensure they don't receive them out of order)
         private float stickX = 0, stickY = 0; // these are [0, 1] values, which we scale up for the display
         private static final float STICK_SIZE = 0.3333f;
 
-        public CustomJoystick(int posx, int posy, int width, int color, byte[] id) {
+        private static final long JOY_UPDATE_INTERVAL = 100; // so we don't spam the server with update messages, set a grace period where we won't send multiple messages
+        private long nextUpdateTimestamp = 0;
+
+        public CustomJoystick(int posx, int posy, int width, int color, byte[] id, boolean landscape) {
             this.posx = posx;
             this.posy = posy;
             this.width = width;
             this.color = color;
             this.id = id;
+            this.landscape = landscape;
         }
 
         @Override
         public byte[] getID() { return id; }
         @Override
-        public void draw(Canvas canvas, Paint paint) {
+        public void draw(Canvas canvas, Paint paint, float baseFontSize) {
             paint.setColor(color);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(Math.max(4f, 0.035f * width));
@@ -540,10 +556,19 @@ public class MainActivity extends AppCompatActivity {
             if (dist > radius) { x *= radius / dist; y *= radius / dist; } // if it's too far away, point in the right direction but put it in bounds
             stickX = (float)(x / radius);
             stickY = (float)(y / radius);
-            sendEvent();
+
+            long now = System.currentTimeMillis();
+            if (now >= nextUpdateTimestamp) {
+                nextUpdateTimestamp = now + JOY_UPDATE_INTERVAL;
+                sendEvent();
+            }
         }
         private void sendEvent() {
-            try { netsbloxSend(ByteBuffer.allocate(13 + id.length).put((byte)'K').putInt(timeIndex++).putFloat(stickX).putFloat(stickY).put(id).array(), netsbloxAddress); }
+            try {
+                float x = landscape ? stickY : stickX;
+                float y = landscape ? stickX : -stickY;
+                netsbloxSend(ByteBuffer.allocate(13 + id.length).put((byte)'K').putInt(timeIndex++).putFloat(x).putFloat(y).put(id).array(), netsbloxAddress);
+            }
             catch (Exception ignored) {}
         }
         @Override
@@ -580,7 +605,7 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public byte[] getID() { return id; }
         @Override
-        public void draw(Canvas canvas, Paint paint) {
+        public void draw(Canvas canvas, Paint paint, float baseFontSize) {
             paint.setColor(Color.BLACK);
             paint.setStyle(Paint.Style.FILL);
             canvas.drawRect(posx, posy, posx + width, posy + height, paint);
@@ -630,6 +655,7 @@ public class MainActivity extends AppCompatActivity {
         private final byte[] id;
         private String text;
         private boolean readonly;
+        private float fontSize = 1;
 
         private static final int PADDING = 10;
 
@@ -648,10 +674,11 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public byte[] getID() { return id; }
         @Override
-        public void draw(Canvas canvas, Paint paint) {
+        public void draw(Canvas canvas, Paint paint, float baseFontSize) {
             paint.setColor(color);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(2f);
+            paint.setTextSize(baseFontSize * fontSize);
             canvas.drawRect(posx, posy, posx + width, posy + height, paint);
             paint.setColor(textColor);
 
@@ -727,6 +754,7 @@ public class MainActivity extends AppCompatActivity {
         private int textColor;
         private final byte[] id;
         private String text;
+        private float fontSize = 1;
 
         public CustomLabel(int posx, int posy, int textColor, byte[] id, String text) {
             this.posx = posx;
@@ -739,10 +767,11 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public byte[] getID() { return id; }
         @Override
-        public void draw(Canvas canvas, Paint paint) {
+        public void draw(Canvas canvas, Paint paint, float baseFontSize) {
             paint.setColor(textColor);
             paint.setStyle(Paint.Style.FILL);
             paint.setTextAlign(Paint.Align.LEFT);
+            paint.setTextSize(baseFontSize * fontSize);
 
             Rect textBounds = new Rect();
             paint.getTextBounds(text, 0, text.length(), textBounds);
@@ -778,6 +807,7 @@ public class MainActivity extends AppCompatActivity {
         private final byte[] id;
         private String text;
         private CheckboxStyle style;
+        private float fontSize = 1;
 
         private static final int CHECKBOX_WIDTH = 35;
         private static final int CHECKBOX_PADDING = 20;
@@ -849,7 +879,8 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public byte[] getID() { return id; }
         @Override
-        public void draw(Canvas canvas, Paint paint) {
+        public void draw(Canvas canvas, Paint paint, float baseFontSize) {
+            paint.setTextSize(baseFontSize * fontSize);
             switch (style) {
                 case CheckBox: drawCheckbox(canvas, paint); break;
                 case ToggleSwitch: drawToggleswitch(canvas, paint); break;
@@ -898,6 +929,7 @@ public class MainActivity extends AppCompatActivity {
         private final byte[] id;
         private byte[] group;
         private String text;
+        private float fontSize = 1;
 
         private static final int RADIO_WIDTH = 35;
         private static final int RADIO_PADDING = 20;
@@ -917,9 +949,10 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public byte[] getID() { return id; }
         @Override
-        public void draw(Canvas canvas, Paint paint) {
+        public void draw(Canvas canvas, Paint paint, float baseFontSize) {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(2f);
+            paint.setTextSize(baseFontSize * fontSize);
             paint.setColor(checkColor);
             canvas.drawArc(new RectF(posx, posy, posx + RADIO_WIDTH, posy + RADIO_WIDTH),
                     0, 360, false, paint);
@@ -992,7 +1025,8 @@ public class MainActivity extends AppCompatActivity {
         Canvas canvas = new Canvas(img);
         Paint paint = new Paint();
         paint.setAntiAlias(true);
-        paint.setTextSize(30 * ((float)height / 1200));
+        float baseFontSize = 30 * ((float)height / 1200);
+        paint.setTextSize(baseFontSize);
 
         if (customControls.isEmpty()) { // if there aren't any controls, put a message to let them know it's intentionally empty
             String msg = "Add controls through NetsBlox!";
@@ -1000,7 +1034,7 @@ public class MainActivity extends AppCompatActivity {
             canvas.drawText(msg, (width - len) / 2f, height / 2f, paint);
         }
         for (ICustomControl control : customControls) {
-            control.draw(canvas, paint);
+            control.draw(canvas, paint, baseFontSize);
         }
 
         view.setImageBitmap(img);
@@ -1344,7 +1378,7 @@ public class MainActivity extends AppCompatActivity {
                                 break;
                             }
                             case 'B': { // add custom button control
-                                if (packet.getLength() < 35) continue;
+                                if (packet.getLength() < 40) continue;
 
                                 ImageView view = findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth(), viewHeight = view.getHeight();
@@ -1355,40 +1389,42 @@ public class MainActivity extends AppCompatActivity {
                                 int height = (int)(floatFromBEBytes(buf, 21) / 100 * viewHeight);
                                 int color = intFromBEBytes(buf, 25);
                                 int textColor = intFromBEBytes(buf, 29);
+                                float fontSize = floatFromBEBytes(buf, 33);
                                 ButtonStyle style;
-                                switch (buf[33]) {
+                                switch (buf[37]) {
                                     case 0: default: style = ButtonStyle.Rect; break;
                                     case 1: style = ButtonStyle.Ellipse; break;
                                     case 2: height = width; style = ButtonStyle.Rect; break; // these are just like previous, but make perfect squares/circles based on width only
                                     case 3: height = width; style = ButtonStyle.Ellipse; break;
                                 }
-                                int idlen = (int)buf[34] & 0xff;
-                                if (packet.getLength() < 35 + idlen) continue;
-                                byte[] id = Arrays.copyOfRange(buf, 35, 35 + idlen);
-                                String text = new String(buf, 35 + idlen, packet.getLength() - (35 + idlen), "UTF-8");
-
+                                boolean landscape = buf[38] != 0;
+                                int idlen = (int)buf[39] & 0xff;
+                                if (packet.getLength() < 40 + idlen) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 40, 40 + idlen);
+                                String text = new String(buf, 40 + idlen, packet.getLength() - (40 + idlen), "UTF-8");
 
                                 ICustomControl control = new CustomButton(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         width, height,
-                                        color, textColor, id, text, style);
+                                        color, textColor, id, text, fontSize, style, landscape);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
                             case 'j': { // add custom joystick control
-                                if (packet.getLength() < 25) continue;
+                                if (packet.getLength() < 26) continue;
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 float width = floatFromBEBytes(buf, 17);
                                 int color = intFromBEBytes(buf, 21);
-                                byte[] id = Arrays.copyOfRange(buf, 25, packet.getLength());
+                                boolean landscape = buf[25] != 0;
+                                byte[] id = Arrays.copyOfRange(buf, 26, packet.getLength());
 
                                 ImageView view = findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth(), viewHeight = view.getHeight();
                                 ICustomControl control = new CustomJoystick(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth),
-                                        color, id);
+                                        color, id, landscape);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
