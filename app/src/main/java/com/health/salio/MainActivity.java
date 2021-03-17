@@ -1167,7 +1167,12 @@ public class MainActivity extends AppCompatActivity {
     private Thread udpServerThread = null;
     private Thread pipeThread = null;
     private Thread sensorStreamThread = null;
+
     private long next_heartbeat = 0;
+
+    private final Object sensorUpdateMutex = new Object();
+    private long sensorUpdatePeriod = Long.MAX_VALUE; // guarded by sensorUpdateMutex
+    private long nextSensorUpdate = Long.MAX_VALUE; // guarded by sensorUpdateMutex
 
     private String reconnectRequest = null;
     private final List<DatagramPacket> pipeQueue = new ArrayList<>();
@@ -1191,6 +1196,22 @@ public class MainActivity extends AppCompatActivity {
     @FunctionalInterface
     private interface Predicate<T> { // for reasons that baffle even sheogorath, java.util.function.Predicate is only API level 24+
         boolean test(T t);
+    }
+
+    private void setSensorUpdatePeriods(long[] periods) {
+        // we need to take the fastest speed, which is the shortest period
+        long oldmin = sensorUpdatePeriod;
+        long min = Long.MAX_VALUE;
+        for (long p : periods) if (p < min) min = p;
+
+        synchronized (sensorUpdateMutex) {
+            // fix the next update time and period for current iteration
+            nextSensorUpdate = min == Long.MAX_VALUE ? min : nextSensorUpdate - sensorUpdatePeriod + min;
+            sensorUpdatePeriod = min;
+
+            // if we moved to a faster speed we need to wake up the current iteration so it doesn't wait for potentially a long time due to oldmin
+            if (min < oldmin) sensorUpdateMutex.notifyAll();
+        }
     }
 
     private void connectToServer() {
@@ -1287,6 +1308,14 @@ public class MainActivity extends AppCompatActivity {
                             case 'O': handleSensor.apply(orientationCalculator); break;
 
                             case 'a': { // authenticate (no-op)
+                                netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
+                                break;
+                            }
+                            case 'p': { // set sensor update periods
+                                if (packet.getLength() < 9 || (packet.getLength() - 9) % 4 != 0) continue;
+                                long[] vals = new long[(packet.getLength() - 9) / 4];
+                                for (int i = 0; i < vals.length; ++i) vals[i] = intFromBEBytes(buf, 9 + i * 4);
+                                setSensorUpdatePeriods(vals);
                                 netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
                                 break;
                             }
@@ -1569,14 +1598,26 @@ public class MainActivity extends AppCompatActivity {
                 int timestamp = 0;
                 while (true) {
                     try {
-                        try { Thread.sleep(100); } catch (Exception ignored) { } // sleep some ammout of time but don't let failure stop us from doin the rest this iteration
+                        // ensure we have proper timing constraints
+                        synchronized (sensorUpdateMutex) {
+                            long now;
+                            while ((now = System.currentTimeMillis()) < nextSensorUpdate) {
+                                if (nextSensorUpdate == Long.MAX_VALUE) sensorUpdateMutex.wait(); // if it's the 'infinity' value, just wait forever
+                                else sensorUpdateMutex.wait(nextSensorUpdate - now); // otherwise wait long enough to reach the target
+                            }
+                            nextSensorUpdate = sensorUpdatePeriod == Long.MAX_VALUE ? Long.MAX_VALUE : now + sensorUpdatePeriod; // if period is inf, next update is inf as well
+                        }
 
-                        if ((timestamp & 127) == 0) { // we need to check the sensor shutdown flag, but only every now and then
-                            synchronized (sensorsRunning) {
-                                while (!sensorsRunning[0]) sensorsRunning.wait();
+                        // we need to check the sensor shutdown flag before sending the message
+                        synchronized (sensorsRunning) {
+                            while (!sensorsRunning[0]) {
+                                try { sensorsRunning.wait(); }
+                                catch (Exception ignored) { } // ignore exceptions from waiting so we don't skip a time step
                             }
                         }
-                        netsbloxSend(getSensorPacket(new byte[]{'Q'}, timestamp++), netsbloxAddress);
+
+                        // finally, pack up the current data and send it
+                        netsbloxSend(getSensorPacket(new byte[] { 'Q' }, timestamp++), netsbloxAddress);
                     }
                     catch (Exception ignored) { }
                 }
@@ -1806,7 +1847,7 @@ public class MainActivity extends AppCompatActivity {
         AutoCompleteTextView serverBox = (AutoCompleteTextView)getNavigationView(R.id.serverHostText);
         serverBox.setThreshold(1);
         serverBox.setAdapter(completionAdapter);
-        serverBox.setText(KNOWN_SERVERS[1]); // auto fill in the first option
+        serverBox.setText(KNOWN_SERVERS[0]); // auto fill in the first option
 
         // --------------------------------------------------
 

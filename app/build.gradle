@@ -10,7 +10,7 @@ android {
         applicationId "com.health.salio"
         minSdkVersion 16
         targetSdkVersion 30
-        versionCode 6
+        versionCode 7
         versionName "0.1.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
