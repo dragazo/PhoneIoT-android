@@ -42,10 +42,10 @@ import android.widget.ImageView;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.widget.ToggleButton;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
@@ -67,6 +67,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
@@ -93,18 +94,37 @@ public class MainActivity extends AppCompatActivity {
             name = n;
         }
     }
-    private static final PermissionRequest[] REQUESTED_PERMISSIONS = new PermissionRequest[] {
-            new PermissionRequest(Manifest.permission.BODY_SENSORS, "Body Sensors"),
-            new PermissionRequest(Manifest.permission.ACTIVITY_RECOGNITION, "Activity Recognition"),
-            new PermissionRequest(Manifest.permission.INTERNET, "Internet"),
-            new PermissionRequest(Manifest.permission.ACCESS_WIFI_STATE, "WIFI State"),
-            new PermissionRequest(Manifest.permission.ACCESS_COARSE_LOCATION, "Coarse Location"),
-            new PermissionRequest(Manifest.permission.ACCESS_FINE_LOCATION, "Fine Location"),
-            new PermissionRequest(Manifest.permission.CAMERA, "Camera"),
-            new PermissionRequest(Manifest.permission.READ_EXTERNAL_STORAGE, "Read External Storage"),
-            new PermissionRequest(Manifest.permission.WRITE_EXTERNAL_STORAGE, "Write External Storage"),
-            new PermissionRequest(Manifest.permission.RECORD_AUDIO, "Record Audio"),
-    };
+    private static PermissionRequest[] _requestedPermissions = null;
+    private static PermissionRequest[] getRequestedPermissions() {
+        if (_requestedPermissions != null) return _requestedPermissions;
+        List<PermissionRequest> res = new ArrayList<>();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+            res.add(new PermissionRequest(Manifest.permission.BODY_SENSORS, "Body Sensors"));
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            res.add(new PermissionRequest(Manifest.permission.ACTIVITY_RECOGNITION, "Activity Recognition"));
+        }
+
+        res.add(new PermissionRequest(Manifest.permission.INTERNET, "Internet"));
+        res.add(new PermissionRequest(Manifest.permission.ACCESS_WIFI_STATE, "WIFI State"));
+
+        res.add(new PermissionRequest(Manifest.permission.ACCESS_COARSE_LOCATION, "Coarse Location"));
+        res.add(new PermissionRequest(Manifest.permission.ACCESS_FINE_LOCATION, "Fine Location"));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            res.add(new PermissionRequest(Manifest.permission.ACCESS_BACKGROUND_LOCATION, "Background Location"));
+        }
+
+        res.add(new PermissionRequest(Manifest.permission.CAMERA, "Camera"));
+        res.add(new PermissionRequest(Manifest.permission.RECORD_AUDIO, "Record Audio"));
+
+        res.add(new PermissionRequest(Manifest.permission.READ_EXTERNAL_STORAGE, "Read External Storage"));
+        res.add(new PermissionRequest(Manifest.permission.WRITE_EXTERNAL_STORAGE, "Write External Storage"));
+
+        _requestedPermissions = new PermissionRequest[res.size()];
+        for (int i = 0; i < _requestedPermissions.length; ++i) _requestedPermissions[i] = res.get(i);
+        return _requestedPermissions;
+    }
 
     // ------------------------------------
 
@@ -217,7 +237,7 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
-    private class LocationSensor implements BasicSensor {
+    private static class LocationSensor implements BasicSensor {
         public final double[] data = new double[4];
         public int updateCount = 0;
         public boolean supported = false;
@@ -280,7 +300,7 @@ public class MainActivity extends AppCompatActivity {
         private static final long SAMPLE_RATE = 250; // ms
         private static final float NORMALIZATION_FACTOR = 32768.0f;
 
-        private MediaRecorder recorder = new MediaRecorder();
+        private final MediaRecorder recorder = new MediaRecorder();
         private final Handler handler = new Handler();
 
         public SoundSensor() {
@@ -303,7 +323,7 @@ public class MainActivity extends AppCompatActivity {
                 recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
 
                 // time for a little rant...
-                // Android 11 (maybe also 10) added more restrictions on file access among apps, relegating them to their own little sandboxes
+                // Android 11 added more restrictions on file access among apps, relegating them to their own little sandboxes
                 // that's all well and good, but now /dev/null is inaccessible, and they didn't think to add any alternative...
                 // so we actually have to SAVE all this garbage to a temporary file and just delete it on exit...
 
@@ -344,7 +364,7 @@ public class MainActivity extends AppCompatActivity {
         return view.findViewById(id);
     }
 
-    private static final long PASSWORD_EXPIRY_INTERVAL = 1 * 1000 * 60 * 60 * 24; // expire after one day
+    private static final long PASSWORD_EXPIRY_INTERVAL = 1000 * 60 * 60 * 24; // expire after one day
 
     private long _rawPassword = 0;
     private long _passwordExpiry = 0;
@@ -1058,7 +1078,7 @@ public class MainActivity extends AppCompatActivity {
         return 0;
     }
 
-    private class PointerInfo {
+    private static class PointerInfo {
         @NonNull public ICustomControl target;
         public int lastX, lastY;
 
@@ -1707,7 +1727,7 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         List<String> failedPermissions = new ArrayList<>();
-        for (PermissionRequest r : REQUESTED_PERMISSIONS) {
+        for (PermissionRequest r : getRequestedPermissions()) {
             if (ContextCompat.checkSelfPermission(this, r.permission) != PackageManager.PERMISSION_GRANTED) {
                 failedPermissions.add(r.permission);
             }
@@ -1859,11 +1879,11 @@ public class MainActivity extends AppCompatActivity {
         gyroscope = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE), 3);
         linearAcceleration = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION), 3);
         rotationVector = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR), 4);
-        stepCounter = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER), 1);
+        stepCounter = new SensorInfo(Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT ? sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) : null, 1);
 
         // position sensors
-        gameRotationVector = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR), 3);
-        geomagneticRotationVector = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR), 3);
+        gameRotationVector = new SensorInfo(Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2 ? sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR) : null, 3);
+        geomagneticRotationVector = new SensorInfo(Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT ? sensorManager.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR) : null, 3);
         magneticField = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD), 3);
         proximity = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY), 1);
 
@@ -1874,7 +1894,6 @@ public class MainActivity extends AppCompatActivity {
         relativeHumidity = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY), 1);
 
         // misc sensors
-
         orientationCalculator = new OrientationCalculator(accelerometer, magneticField);
         location = new LocationSensor(this);
         soundSensor = new SoundSensor();
@@ -1925,12 +1944,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private File createTempImageFile(String extension) throws IOException {
-        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
-        File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-        return File.createTempFile("IMAGE_" + timeStamp + "_", extension, storageDir);
-    }
-
     private Bitmap rotateImage(Bitmap raw, float degrees) {
         Matrix matrix = new Matrix();
         matrix.postRotate(degrees);
@@ -1962,11 +1975,20 @@ public class MainActivity extends AppCompatActivity {
             Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
             if (intent.resolveActivity(getPackageManager()) != null) {
                 try {
-                    File file = createTempImageFile(".jpg");
+                    String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+                    File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+                    File file = File.createTempFile("IMAGE_" + timeStamp + "_", ".jpg", storageDir);
                     Uri fileUri = FileProvider.getUriForFile(this, "com.example.android.fileprovider", file);
                     intent.putExtra(MediaStore.EXTRA_OUTPUT, fileUri);
-                    imageActivityUri = fileUri;
+
+                    // delete the last image if it isn't already (incomplete load cycle)
+                    if (imageActivityCorrectedPath != null) {
+                        try { new File(imageActivityCorrectedPath).delete(); }
+                        catch (Exception ignored) {}
+                    }
                     imageActivityCorrectedPath = file.getAbsolutePath();
+                    imageActivityUri = fileUri;
+
                     startActivityForResult(intent, CAMERA_REQUEST_CODE);
                 }
                 catch (Exception ex) {
@@ -1979,20 +2001,23 @@ public class MainActivity extends AppCompatActivity {
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != Activity.RESULT_OK) return;
-        switch (requestCode) {
-            case CAMERA_REQUEST_CODE: {
+
+        if (requestCode == CAMERA_REQUEST_CODE) {
+            try {
+                Bitmap img = grabResultImage();
+                if (cameraImageDest != null) {
+                    cameraImageDest.setImage(img, true);
+                    byte[] id = cameraImageDest.getID();
+                    if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress);
+                }
+            } catch (Exception ex) {
+                Toast.makeText(this, String.format("failed to load image: %s", ex), Toast.LENGTH_LONG).show();
+            }
+            finally {
                 try {
-                    Bitmap img = grabResultImage();
-                    if (cameraImageDest != null) {
-                        cameraImageDest.setImage(img, true);
-                        byte[] id = cameraImageDest.getID();
-                        if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress);
-                    }
+                    if (new File(imageActivityCorrectedPath).delete()) imageActivityCorrectedPath = null; // we read the file, so we can delete it and mark as gone
                 }
-                catch (Exception ex) {
-                    Toast.makeText(this, String.format("failed to load image: %s", ex), Toast.LENGTH_LONG).show();
-                }
-                break;
+                catch (Exception ignored) {}
             }
         }
     }
