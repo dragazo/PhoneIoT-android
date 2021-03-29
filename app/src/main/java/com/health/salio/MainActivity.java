@@ -111,9 +111,6 @@ public class MainActivity extends AppCompatActivity {
 
         res.add(new PermissionRequest(Manifest.permission.ACCESS_COARSE_LOCATION, "Coarse Location"));
         res.add(new PermissionRequest(Manifest.permission.ACCESS_FINE_LOCATION, "Fine Location"));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            res.add(new PermissionRequest(Manifest.permission.ACCESS_BACKGROUND_LOCATION, "Background Location"));
-        }
 
         res.add(new PermissionRequest(Manifest.permission.CAMERA, "Camera"));
         res.add(new PermissionRequest(Manifest.permission.RECORD_AUDIO, "Record Audio"));
@@ -487,17 +484,17 @@ public class MainActivity extends AppCompatActivity {
             RectF rect = new RectF(0, 0, width, height);
             drawRegion(canvas, paint, rect);
 
-            if (pressed) {
-                paint.setColor(Color.argb(100, 255, 255, 255));
-                drawRegion(canvas, paint, rect);
-            }
-
             Rect textBounds = new Rect();
             paint.getTextBounds(text, 0, text.length(), textBounds);
 
             paint.setColor(textColor);
             paint.setTextAlign(Paint.Align.CENTER);
             canvas.drawText(text, width / 2f, (height + textBounds.height() - 4) / 2f, paint);
+
+            if (pressed) {
+                paint.setColor(Color.argb(100, 255, 255, 255));
+                drawRegion(canvas, paint, rect);
+            }
 
             canvas.restore();
         }
@@ -789,8 +786,9 @@ public class MainActivity extends AppCompatActivity {
         private String text;
         private float fontSize;
         private Paint.Align align;
+        private boolean landscape;
 
-        public CustomLabel(int posx, int posy, int textColor, byte[] id, String text, float fontSize, Paint.Align align) {
+        public CustomLabel(int posx, int posy, int textColor, byte[] id, String text, float fontSize, Paint.Align align, boolean landscape) {
             this.posx = posx;
             this.posy = posy;
             this.textColor = textColor;
@@ -798,12 +796,17 @@ public class MainActivity extends AppCompatActivity {
             this.text = text;
             this.fontSize = fontSize;
             this.align = align;
+            this.landscape = landscape;
         }
 
         @Override
         public byte[] getID() { return id; }
         @Override
         public void draw(Canvas canvas, Paint paint, float baseFontSize) {
+            canvas.save();
+            canvas.translate(posx, posy);
+            if (landscape) canvas.rotate(90);
+
             paint.setColor(textColor);
             paint.setStyle(Paint.Style.FILL);
             paint.setTextAlign(align);
@@ -812,7 +815,9 @@ public class MainActivity extends AppCompatActivity {
             Rect textBounds = new Rect();
             paint.getTextBounds(text, 0, text.length(), textBounds);
 
-            canvas.drawText(text, posx, posy + textBounds.height() - 6, paint);
+            canvas.drawText(text, 0, textBounds.height() - 6, paint);
+
+            canvas.restore();
         }
         
         @Override
@@ -1537,22 +1542,23 @@ public class MainActivity extends AppCompatActivity {
                                 break;
                             }
                             case 'g': { // add custom label control
-                                if (packet.getLength() < 27) continue;
+                                if (packet.getLength() < 28) continue;
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 int textColor = intFromBEBytes(buf, 17);
                                 float fontSize = floatFromBEBytes(buf, 21);
                                 Paint.Align align = parseTextAlign(buf[25]);
-                                int idlen = (int)buf[26] & 0xff;
-                                if (packet.getLength() < 27 + idlen) continue;
-                                byte[] id = Arrays.copyOfRange(buf, 27, 27 + idlen);
-                                String text = new String(buf, 27 + idlen, packet.getLength() - (27 + idlen), "UTF-8");
+                                boolean landscape = buf[26] != 0;
+                                int idlen = (int)buf[27] & 0xff;
+                                if (packet.getLength() < 28 + idlen) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 28, 28 + idlen);
+                                String text = new String(buf, 28 + idlen, packet.getLength() - (28 + idlen), "UTF-8");
 
                                 ImageView view = findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth(), viewHeight = view.getHeight();
                                 ICustomControl control = new CustomLabel(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
-                                        textColor, id, text, fontSize, align);
+                                        textColor, id, text, fontSize, align, landscape);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
