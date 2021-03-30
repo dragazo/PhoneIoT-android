@@ -1,4 +1,4 @@
-package com.health.salio;
+package com.netsblox.phoneiot;
 
 import android.content.Context;
 
@@ -21,6 +21,6 @@ public class ExampleInstrumentedTest {
     public void useAppContext() {
         // Context of the app under test.
         Context appContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        assertEquals("com.health.salio", appContext.getPackageName());
+        assertEquals("com.netsblox.phoneiot", appContext.getPackageName());
     }
 }
