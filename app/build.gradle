@@ -7,11 +7,11 @@ android {
     buildToolsVersion "30.0.2"
 
     defaultConfig {
-        applicationId "com.netsblox.phoneiot"
+        applicationId "org.netsblox.phoneiot"
         minSdkVersion 16
         targetSdkVersion 30
-        versionCode 10
-        versionName "0.1.0"
+        versionCode 11
+        versionName "1.0.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

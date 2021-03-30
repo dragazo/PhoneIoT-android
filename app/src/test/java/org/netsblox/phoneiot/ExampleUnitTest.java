@@ -1,4 +1,4 @@
-package com.netsblox.phoneiot;
+package org.netsblox.phoneiot;
 
 import org.junit.Test;
 

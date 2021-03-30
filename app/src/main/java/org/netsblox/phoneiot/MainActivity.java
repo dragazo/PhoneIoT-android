@@ -1,4 +1,4 @@
-package com.netsblox.phoneiot;
+package org.netsblox.phoneiot;
 
 import android.Manifest;
 import android.app.Activity;
@@ -61,6 +61,7 @@ import com.google.android.gms.location.LocationSettingsResponse;
 import com.google.android.gms.location.SettingsClient;
 import com.google.android.gms.tasks.Task;
 import com.google.android.material.navigation.NavigationView;
+import org.netsblox.phoneiot.R;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -1219,7 +1220,6 @@ public class MainActivity extends AppCompatActivity {
     private final Handler handler = new Handler();
 
     private static final String[] KNOWN_SERVERS = new String[] {
-            "24.11.247.254", "10.0.0.24", // temporary dev addresses
             "editor.netsblox.org", "dev.netsblox.org",
     };
 
