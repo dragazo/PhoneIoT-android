@@ -1221,6 +1221,7 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String[] KNOWN_SERVERS = new String[] {
             "editor.netsblox.org", "dev.netsblox.org",
+            "24.11.247.254", "10.0.0.24", // temporary dev addresses for convenience
     };
 
     // schedules a new toast to be shown for the given duration - this works from any calling thread
