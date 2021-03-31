@@ -610,13 +610,42 @@ public class MainActivity extends AppCompatActivity {
             return new float[] { stickX, stickY };
         }
     }
+
+    private enum FitType {
+        Stretch, Fit, Zoom,
+    }
+    private FitType parseFitType(byte val) {
+        switch (val) {
+            case 1: return FitType.Zoom;
+            case 2: return FitType.Stretch;
+            default: return FitType.Fit;
+        }
+    }
+
+    private static RectF center(Bitmap img, RectF rect, float scale) {
+        float srcw = (float)img.getWidth(), srch = (float)img.getHeight();
+        float destw = srcw * scale, desth = srch * scale;
+        float destx = rect.left + (rect.width() - destw) / 2, desty = rect.top + (rect.height() - desth) / 2;
+        return new RectF(destx, desty, destx + destw, desty + desth);
+    }
+    private static RectF fitRect(Bitmap img, RectF rect, FitType fit) {
+        switch (fit) {
+            case Stretch: return rect;
+            case Fit: return center(img, rect, Math.min(rect.width() / img.getWidth(), rect.height() / img.getHeight()));
+            case Zoom: return center(img, rect, Math.max(rect.width() / img.getWidth(), rect.height() / img.getHeight()));
+        }
+        throw new RuntimeException("unreachable");
+    }
+
     private class CustomImageBox implements ICustomControl, IImageLike {
         private int posx, posy, width, height;
         private final byte[] id;
         private Bitmap img;
         private boolean readonly;
+        private boolean landscape;
+        private FitType fit;
 
-        public CustomImageBox(int posx, int posy, int width, int height, byte[] id, Bitmap img, boolean readonly) {
+        public CustomImageBox(int posx, int posy, int width, int height, byte[] id, Bitmap img, boolean readonly, boolean landscape, FitType fit) {
             this.posx = posx;
             this.posy = posy;
             this.width = width;
@@ -624,32 +653,45 @@ public class MainActivity extends AppCompatActivity {
             this.id = id;
             this.img = img;
             this.readonly = readonly;
+            this.landscape = landscape;
+            this.fit = fit;
         }
 
         @Override
         public byte[] getID() { return id; }
         @Override
         public void draw(Canvas canvas, Paint paint, float baseFontSize) {
+            canvas.save();
+            canvas.translate(posx, posy);
+            if (landscape) canvas.rotate(90);
+
+            RectF mainRect = new RectF(0, 0, width, height);
             paint.setColor(Color.BLACK);
             paint.setStyle(Paint.Style.FILL);
-            canvas.drawRect(posx, posy, posx + width, posy + height, paint);
+            canvas.drawRect(mainRect, paint);
 
-            float srcw = (float)img.getWidth(), srch = (float)img.getHeight();
-            float mult = Math.min((float)width / srcw, (float)height / srch);
-            float destw = srcw * mult, desth = srch * mult;
-            float destx = posx + ((float)width - destw) / 2, desty = posy + ((float)height - desth) / 2;
-            Rect src = new Rect(0, 0, img.getWidth(), img.getHeight());
-            Rect dest = new Rect((int)destx, (int)desty, (int)(destx + destw), (int)(desty + desth));
-            canvas.drawBitmap(img, src, dest, paint);
+            {
+                canvas.save();
+                canvas.clipRect(mainRect);
+
+                Rect src = new Rect(0, 0, img.getWidth(), img.getHeight());
+                RectF dest = fitRect(img, mainRect, fit);
+                canvas.drawBitmap(img, src, dest, paint);
+
+                canvas.restore();
+            }
 
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(2f);
-            canvas.drawRect(posx, posy, posx + width, posy + height, paint);
+            canvas.drawRect(mainRect, paint);
+
+            canvas.restore();
         }
 
         @Override
         public boolean containsPoint(int x, int y) {
-            return x >= posx && y >= posy && x <= posx + width && y <= posy + height;
+            RectF rect = landscape ? new RectF(posx - height, posy, posx, posy + width) : new RectF(posx, posy, posx + width, posy + height);
+            return rect.contains(x, y);
         }
         @Override
         public void handleMouseDown(View view, MainActivity context, int x, int y) {
@@ -1498,20 +1540,22 @@ public class MainActivity extends AppCompatActivity {
                                 break;
                             }
                             case 'U': { // add custom image display
-                                if (packet.getLength() < 26) continue;
+                                if (packet.getLength() < 28) continue;
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 float width = floatFromBEBytes(buf, 17);
                                 float height = floatFromBEBytes(buf, 21);
                                 boolean readonly = buf[25] != 0;
-                                byte[] id = Arrays.copyOfRange(buf, 26, packet.getLength());
+                                boolean landscape = buf[26] != 0;
+                                FitType fit = parseFitType(buf[27]);
+                                byte[] id = Arrays.copyOfRange(buf, 28, packet.getLength());
 
                                 ImageView view = findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth(), viewHeight = view.getHeight();
                                 ICustomControl control = new CustomImageBox(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
-                                        id, getDefaultImage(), readonly);
+                                        id, getDefaultImage(), readonly, landscape, fit);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
