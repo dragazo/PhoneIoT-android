@@ -570,7 +570,7 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public boolean containsPoint(int x, int y) {
-            return x >= posx && y >= posy && x <= posx + width && y <= posy + width;
+            return ellipseContains(new RectF(posx, posy, posx + width, posy + width), x, y);
         }
         private void updateStick(double x, double y) {
             double radius = width / 2.0;
@@ -723,10 +723,11 @@ public class MainActivity extends AppCompatActivity {
         private boolean readonly;
         private float fontSize;
         private Paint.Align align;
+        private boolean landscape;
 
         private static final int PADDING = 10;
 
-        public CustomTextField(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text, boolean readonly, float fontSize, Paint.Align align) {
+        public CustomTextField(int posx, int posy, int width, int height, int color, int textColor, byte[] id, String text, boolean readonly, float fontSize, Paint.Align align, boolean landscape) {
             this.posx = posx;
             this.posy = posy;
             this.width = width;
@@ -738,17 +739,22 @@ public class MainActivity extends AppCompatActivity {
             this.readonly = readonly;
             this.fontSize = fontSize;
             this.align = align;
+            this.landscape = landscape;
         }
 
         @Override
         public byte[] getID() { return id; }
         @Override
         public void draw(Canvas canvas, Paint paint, float baseFontSize) {
+            canvas.save();
+            canvas.translate(posx, posy);
+            if (landscape) canvas.rotate(90);
+
             paint.setColor(color);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(2f);
             paint.setTextSize(baseFontSize * fontSize);
-            canvas.drawRect(posx, posy, posx + width, posy + height, paint);
+            canvas.drawRect(0, 0, width, height, paint);
             paint.setColor(textColor);
 
             Rect textBounds = new Rect();
@@ -763,12 +769,14 @@ public class MainActivity extends AppCompatActivity {
 
                 canvas.save();
                 float correction = (align == Paint.Align.CENTER ? 0.5f : align == Paint.Align.RIGHT ? 1 : 0) * layout.getWidth();
-                canvas.translate(posx + PADDING + correction, posy);
+                canvas.translate(PADDING + correction, 0);
                 canvas.clipRect(new RectF(-correction, 0, width, height));
                 layout.draw(canvas);
                 canvas.restore();
             }
             else canvas.drawText(text, posx, posy, paint);
+
+            canvas.restore();
         }
 
         @Override
@@ -1560,27 +1568,28 @@ public class MainActivity extends AppCompatActivity {
                                 break;
                             }
                             case 'T': { // add custom text field control
-                                if (packet.getLength() < 40) continue;
+                                if (packet.getLength() < 41) continue;
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 float width = floatFromBEBytes(buf, 17);
                                 float height = floatFromBEBytes(buf, 21);
                                 int color = intFromBEBytes(buf, 25);
                                 int textColor = intFromBEBytes(buf, 29);
-                                boolean readonly = buf[33] != 0;
-                                float fontSize = floatFromBEBytes(buf, 34);
-                                Paint.Align align = parseTextAlign(buf[38]);
-                                int idlen = (int)buf[39] & 0xff;
-                                if (packet.getLength() < 40 + idlen) continue;
-                                byte[] id = Arrays.copyOfRange(buf, 40, 40 + idlen);
-                                String text = new String(buf, 40 + idlen, packet.getLength() - (40 + idlen), "UTF-8");
+                                float fontSize = floatFromBEBytes(buf, 33);
+                                Paint.Align align = parseTextAlign(buf[37]);
+                                boolean readonly = buf[38] != 0;
+                                boolean landscape = buf[39] != 0;
+                                int idlen = (int)buf[40] & 0xff;
+                                if (packet.getLength() < 41 + idlen) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 41, 41 + idlen);
+                                String text = new String(buf, 41 + idlen, packet.getLength() - (41 + idlen), "UTF-8");
 
                                 ImageView view = findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth(), viewHeight = view.getHeight();
                                 ICustomControl control = new CustomTextField(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
-                                        color, textColor, id, text, readonly, fontSize, align);
+                                        color, textColor, id, text, readonly, fontSize, align, landscape);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
