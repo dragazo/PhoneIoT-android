@@ -9,6 +9,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.BlendMode;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
@@ -396,7 +397,7 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------
 
-    private boolean ellipseContains(RectF ellipse, float x, float y) {
+    private static boolean ellipseContains(RectF ellipse, float x, float y) {
         float rx = ellipse.width() / 2f;
         float ry = ellipse.height() / 2f;
         float offx = x - (ellipse.left + rx);
@@ -404,12 +405,19 @@ public class MainActivity extends AppCompatActivity {
         return (offx * offx) / (rx * rx) + (offy * offy) / (ry * ry) <= 1;
     }
 
-    private Paint.Align parseTextAlign(byte val) {
+    private static Paint.Align parseTextAlign(byte val) {
         switch (val) {
             default: return Paint.Align.LEFT;
             case 1: return Paint.Align.CENTER;
             case 2: return Paint.Align.RIGHT;
         }
+    }
+
+    private static RectF rotate(RectF rect) {
+        return new RectF(rect.left - rect.height(), rect.top, (rect.left - rect.height()) + rect.height(), rect.top + rect.width());
+    }
+    private static RectF inflate(RectF rect, float padding) {
+        return new RectF(rect.left - padding, rect.top - padding, rect.right + padding, rect.bottom + padding);
     }
 
     // ----------------------------------------------
@@ -424,6 +432,10 @@ public class MainActivity extends AppCompatActivity {
     }
     private interface IToggleable extends ICustomControl {
         boolean getToggleState();
+        void setToggleState(boolean val);
+    }
+    private interface IPushable extends ICustomControl {
+        boolean isPushed();
     }
     private interface IJoystickLike extends ICustomControl {
         float[] getVector();
@@ -440,7 +452,7 @@ public class MainActivity extends AppCompatActivity {
     private enum ButtonStyle {
         Rect, Ellipse,
     }
-    private class CustomButton implements ICustomControl, IToggleable, ITextLike {
+    private class CustomButton implements ICustomControl, ITextLike, IPushable {
         private int posx, posy, width, height;
         private int color, textColor;
         private final byte[] id;
@@ -521,7 +533,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
-        public boolean getToggleState() { return pressed; }
+        public boolean isPushed() { return pressed; }
 
         @Override
         public String getText() { return text; }
@@ -893,108 +905,128 @@ public class MainActivity extends AppCompatActivity {
     private class CustomCheckbox implements ICustomControl, IToggleable, ITextLike {
         private int posx, posy;
         private int checkColor, textColor;
-        private boolean state;
+        private boolean checked;
         private final byte[] id;
         private String text;
         private CheckboxStyle style;
-        private float fontSize = 1;
+        private float fontSize;
+        private boolean landscape;
+        private boolean readonly;
 
-        private static final int CHECKBOX_WIDTH = 35;
-        private static final int CHECKBOX_PADDING = 20;
+        private float boxW = 0;
+        private float boxH = 0;
 
-        public CustomCheckbox(int posx, int posy, int checkColor, int textColor, boolean state, byte[] id, String text, CheckboxStyle style) {
+        private final int UNCHECKED_COLOR = Color.argb(255, 217, 217, 217);
+
+        private static final float STROKE_WIDTH = 4f;
+
+        private static final float CHECKBOX_SIZE = 1f;
+
+        private static final float TOGGLESWITCH_WIDTH = 2.5f;
+        private static final float TOGGLESWITCH_HEIGHT = 1.5f;
+
+        private static final float TEXT_PADDING = 25f;
+        private static final float CLICK_PADDING = 20;
+
+        public CustomCheckbox(int posx, int posy, int checkColor, int textColor, boolean checked, byte[] id, String text, CheckboxStyle style, float fontSize, boolean landscape, boolean readonly) {
             this.posx = posx;
             this.posy = posy;
             this.checkColor = checkColor;
             this.textColor = textColor;
-            this.state = state;
+            this.checked = checked;
             this.id = id;
             this.text = text;
             this.style = style;
+            this.fontSize = fontSize;
+            this.landscape = landscape;
+            this.readonly = readonly;
         }
 
-        private void drawCheckbox(Canvas canvas, Paint paint) {
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(2f);
-            paint.setColor(checkColor);
-            canvas.drawRect(posx, posy, posx + CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH, paint);
+        private void drawToggleswitch(Canvas canvas, Paint paint, float size) {
+            float w = size * TOGGLESWITCH_WIDTH;
+            float h = size * TOGGLESWITCH_HEIGHT;
+            boxW = w; boxH = h;
 
-            if (state) {
-                paint.setStrokeWidth(3f);
-                float x1 = posx + 5f, y1 = posy + (float)CHECKBOX_WIDTH * 0.5f;
-                float x2 = posx + (float)CHECKBOX_WIDTH * 0.5f, y2 = posy + CHECKBOX_WIDTH * 0.75f;
-                float x3 = posx + CHECKBOX_WIDTH, y3 = posy - (float)CHECKBOX_WIDTH * 0.5f;
+            paint.setColor(checked ? checkColor : UNCHECKED_COLOR);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setStrokeWidth(STROKE_WIDTH);
+            canvas.drawRect(h / 2, 0, w - h / 2, h, paint);
+            canvas.drawArc(new RectF(0, 0, h, h), 0, 360, false, paint);
+            canvas.drawArc(new RectF(w - h, 0, w, h), 0, 360, false, paint);
+
+            float circleLeft = (checked ? w - h : 0) + STROKE_WIDTH;
+            RectF circle = new RectF(circleLeft, STROKE_WIDTH, circleLeft + h - 2 * STROKE_WIDTH, h - STROKE_WIDTH);
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                BlendMode m = paint.getBlendMode();
+                paint.setBlendMode(BlendMode.XOR);
+                canvas.drawArc(circle, 0, 360, false, paint);
+                paint.setBlendMode(m);
+            }
+            else {
+                paint.setColor(Color.WHITE);
+                canvas.drawArc(circle, 0, 260, false, paint);
+            }
+        }
+        private void drawCheckbox(Canvas canvas, Paint paint, float size) {
+            float w = size * CHECKBOX_SIZE;
+            boxW = boxH = w;
+            RectF rect = new RectF(0, 0, w, w);
+
+            paint.setColor(checked ? checkColor : UNCHECKED_COLOR);
+
+            paint.setStrokeWidth(STROKE_WIDTH);
+            paint.setStyle(Paint.Style.STROKE);
+            canvas.drawRect(rect, paint);
+            if (checked) {
+                float x1 = w / 4, y1 = w / 2;
+                float x2 = w / 2, y2 = 3 * w / 4;
+                float x3 = w, y3 = -w / 2;
                 canvas.drawLines(new float[] {
                         x1, y1, x2, y2,
                         x2, y2, x3, y3,
                 }, paint);
             }
-
-            Rect textBounds = new Rect();
-            paint.getTextBounds(text, 0, text.length(), textBounds);
-
-            paint.setColor(textColor);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setTextAlign(Paint.Align.LEFT);
-            canvas.drawText(text, posx + CHECKBOX_WIDTH + 17, posy + ((float)CHECKBOX_WIDTH + textBounds.height() - 4) / 2, paint);
-        }
-        private void drawToggleswitch(Canvas canvas, Paint paint) {
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(2f);
-            paint.setColor(checkColor);
-            canvas.drawArc(new RectF(posx, posy, posx + CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH), 90, 180, false, paint);
-            canvas.drawArc(new RectF(posx + CHECKBOX_WIDTH, posy, posx + 2 * CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH), 270, 180, false, paint);
-            canvas.drawLine(posx + 0.5f * CHECKBOX_WIDTH, posy, posx + 1.5f * CHECKBOX_WIDTH, posy, paint);
-            canvas.drawLine(posx + 0.5f * CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH, posx + 1.5f * CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH, paint);
-
-            float checkPosX;
-            if (state) {
-                paint.setStyle(Paint.Style.FILL);
-                checkPosX = posx + CHECKBOX_WIDTH;
-            }
-            else {
-                checkPosX = posx;
-            }
-            canvas.drawArc(new RectF(checkPosX + 5, posy + 5, checkPosX + CHECKBOX_WIDTH - 5, posy + CHECKBOX_WIDTH - 5), 0, 360, false, paint);
-
-            Rect textBounds = new Rect();
-            paint.getTextBounds(text, 0, text.length(), textBounds);
-
-            paint.setColor(textColor);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setTextAlign(Paint.Align.LEFT);
-            canvas.drawText(text, posx + 2f * CHECKBOX_WIDTH + 17, posy + ((float)CHECKBOX_WIDTH + textBounds.height() - 4) / 2, paint);
         }
 
         @Override
         public byte[] getID() { return id; }
         @Override
         public void draw(Canvas canvas, Paint paint, float baseFontSize) {
-            paint.setTextSize(baseFontSize * fontSize);
+            canvas.save();
+            canvas.translate(posx, posy);
+            if (landscape) canvas.rotate(90);
+
+            float size = baseFontSize * fontSize;
             switch (style) {
-                case CheckBox: drawCheckbox(canvas, paint); break;
-                case ToggleSwitch: drawToggleswitch(canvas, paint); break;
+                case CheckBox: drawCheckbox(canvas, paint, size); break;
+                case ToggleSwitch: drawToggleswitch(canvas, paint, size); break;
             }
+
+            paint.setTextSize(size);
+            paint.setTextAlign(Paint.Align.LEFT);
+            paint.setColor(textColor);
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawText(text, boxW + TEXT_PADDING, (boxH + size) / 2.375f, paint);
+
+            canvas.restore();
         }
         
         @Override
         public boolean containsPoint(int x, int y) {
-            RectF rect;
-            switch (style) {
-                case CheckBox: rect = new RectF(posx, posy, posx + CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH); break;
-                case ToggleSwitch: rect = new RectF(posx, posy, posx + 2 * CHECKBOX_WIDTH, posy + CHECKBOX_WIDTH); break;
-                default: rect = new RectF(0, 0, 0, 0); break;
-            }
-            return x >= rect.left - CHECKBOX_PADDING && y >= rect.top - CHECKBOX_PADDING &&
-                    x <= rect.right + CHECKBOX_PADDING && y <= rect.bottom + CHECKBOX_PADDING;
+            if (boxW == 0 && boxH == 0) return false;
+            RectF base = new RectF(posx, posy, posx + boxW, posy + boxH);
+            return inflate(landscape ? rotate(base) : base, CLICK_PADDING).contains(x, y);
         }
         @Override
         public void handleMouseDown(View view, MainActivity context, int x, int y) {
-            try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(2 + id.length).put((byte)'z').put((byte)(state ? 1 : 0)).put(id).array(), netsbloxAddress); }
-            catch (Exception ignored) {}
+            if (!readonly) {
+                view.playSoundEffect(SoundEffectConstants.CLICK);
+                checked = !checked;
 
-            view.playSoundEffect(SoundEffectConstants.CLICK);
-            state = !state;
+                try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(2 + id.length).put((byte) 'z').put((byte) (checked ? 1 : 0)).put(id).array(), netsbloxAddress); }
+                catch (Exception ignored) { }
+            }
         }
         @Override
         public void handleMouseMove(View view, MainActivity context, int x, int y) { }
@@ -1002,7 +1034,12 @@ public class MainActivity extends AppCompatActivity {
         public void handleMouseUp(View view, MainActivity context) { }
 
         @Override
-        public boolean getToggleState() { return state; }
+        public boolean getToggleState() { return checked; }
+        @Override
+        public void setToggleState(boolean val) {
+            checked = val;
+            redrawCustomControls(false);
+        }
 
         @Override
         public String getText() { return text; }
@@ -1015,7 +1052,7 @@ public class MainActivity extends AppCompatActivity {
     private class CustomRadioButton implements ICustomControl, IToggleable, ITextLike {
         private int posx, posy;
         private int checkColor, textColor;
-        private boolean state;
+        private boolean checked;
         private final byte[] id;
         private byte[] group;
         private String text;
@@ -1025,12 +1062,12 @@ public class MainActivity extends AppCompatActivity {
         private static final int RADIO_PADDING = 20;
         private static final int RADIO_INSET = 5;
 
-        public CustomRadioButton(int posx, int posy, int checkColor, int textColor, boolean state, byte[] id, byte[] group, String text) {
+        public CustomRadioButton(int posx, int posy, int checkColor, int textColor, boolean checked, byte[] id, byte[] group, String text) {
             this.posx = posx;
             this.posy = posy;
             this.checkColor = checkColor;
             this.textColor = textColor;
-            this.state = state;
+            this.checked = checked;
             this.id = id;
             this.group = group;
             this.text = text;
@@ -1047,7 +1084,7 @@ public class MainActivity extends AppCompatActivity {
             canvas.drawArc(new RectF(posx, posy, posx + RADIO_WIDTH, posy + RADIO_WIDTH),
                     0, 360, false, paint);
 
-            if (state) {
+            if (checked) {
                 paint.setStyle(Paint.Style.FILL);
                 canvas.drawArc(new RectF(posx + RADIO_INSET, posy + RADIO_INSET, posx + RADIO_WIDTH - RADIO_INSET, posy + RADIO_WIDTH - RADIO_INSET),
                         0, 360, false, paint);
@@ -1070,11 +1107,11 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void handleMouseDown(View view, MainActivity context, int x, int y) {
             // set state to true and uncheck every other radiobutton in the same group
-            state = true;
+            checked = true;
             for (ICustomControl other : context.customControls) {
                 if (other != this && other instanceof CustomRadioButton) {
                     CustomRadioButton b = (CustomRadioButton)other;
-                    if (Arrays.equals(b.group, this.group)) b.state = false;
+                    if (Arrays.equals(b.group, this.group)) b.checked = false;
                 }
             }
 
@@ -1089,7 +1126,9 @@ public class MainActivity extends AppCompatActivity {
         public void handleMouseUp(View view, MainActivity context) { }
 
         @Override
-        public boolean getToggleState() { return state; }
+        public boolean getToggleState() { return checked; }
+        @Override
+        public void setToggleState(boolean val) { checked = val; }
 
         @Override
         public String getText() { return text; }
@@ -1468,11 +1507,30 @@ public class MainActivity extends AppCompatActivity {
                                 }
                                 break;
                             }
+                            case 'V': { // is pushed
+                                if (packet.getLength() < 9) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
+                                IPushable target = (IPushable)getCustomControlWithIDWhere(id, c -> c instanceof IPushable);
+                                netsbloxSend(new byte[] { buf[0], (byte)(target == null ? 2 : target.isPushed() ? 1 : 0) }, packet.getSocketAddress());
+                                break;
+                            }
                             case 'W': { // get toggle state
                                 if (packet.getLength() < 9) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
                                 IToggleable target = (IToggleable)getCustomControlWithIDWhere(id, c -> c instanceof IToggleable);
                                 netsbloxSend(new byte[] { buf[0], (byte)(target == null ? 2 : target.getToggleState() ? 1 : 0) }, packet.getSocketAddress());
+                                break;
+                            }
+                            case 'w': { // set toggle state
+                                if (packet.getLength() < 10) continue;
+                                boolean state = buf[9] != 0;
+                                byte[] id = Arrays.copyOfRange(buf, 10, packet.getLength());
+                                IToggleable target = (IToggleable)getCustomControlWithIDWhere(id, c -> c instanceof IToggleable);
+                                if (target == null) netsbloxSend(new byte[] { buf[0], 3 }, packet.getSocketAddress());
+                                else {
+                                    target.setToggleState(state);
+                                    netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                }
                                 break;
                             }
                             case 'C': { // clear custom controls
@@ -1615,27 +1673,30 @@ public class MainActivity extends AppCompatActivity {
                                 break;
                             }
                             case 'Z': { // add custom checkbox control
-                                if (packet.getLength() < 28) continue;
+                                if (packet.getLength() < 34) continue;
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 int checkColor = intFromBEBytes(buf, 17);
                                 int textColor = intFromBEBytes(buf, 21);
-                                boolean state = buf[25] != 0;
+                                float fontSize = floatFromBEBytes(buf, 25);
+                                boolean checked = buf[29] != 0;
                                 CheckboxStyle style;
-                                switch (buf[26]) {
-                                    case 0: default: style = CheckboxStyle.CheckBox; break;
-                                    case 1: style = CheckboxStyle.ToggleSwitch; break;
+                                switch (buf[30]) {
+                                    case 0: default: style = CheckboxStyle.ToggleSwitch; break;
+                                    case 1: style = CheckboxStyle.CheckBox; break;
                                 }
-                                int idlen = (int)buf[27] & 0xff;
-                                if (packet.getLength() < 28 + idlen) continue;
-                                byte[] id = Arrays.copyOfRange(buf, 28, 28 + idlen);
-                                String text = new String(buf, 28 + idlen, packet.getLength() - (28 + idlen), "UTF-8");
+                                boolean landscape = buf[31] != 0;
+                                boolean readonly = buf[32] != 0;
+                                int idlen = (int)buf[33] & 0xff;
+                                if (packet.getLength() < 34 + idlen) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 34, 34 + idlen);
+                                String text = new String(buf, 34 + idlen, packet.getLength() - (34 + idlen), "UTF-8");
 
                                 ImageView view = findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth(), viewHeight = view.getHeight();
                                 ICustomControl control = new CustomCheckbox(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
-                                        checkColor, textColor, state, id, text, style);
+                                        checkColor, textColor, checked, id, text, style, fontSize, landscape, readonly);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
