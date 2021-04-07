@@ -1056,13 +1056,23 @@ public class MainActivity extends AppCompatActivity {
         private final byte[] id;
         private byte[] group;
         private String text;
-        private float fontSize = 1;
+        private float fontSize;
+        boolean landscape;
+        boolean readonly;
 
-        private static final int RADIO_WIDTH = 35;
-        private static final int RADIO_PADDING = 20;
-        private static final int RADIO_INSET = 5;
+        private float boxW = 0;
+        private float boxH = 0;
 
-        public CustomRadioButton(int posx, int posy, int checkColor, int textColor, boolean checked, byte[] id, byte[] group, String text) {
+        private final int UNCHECKED_COLOR = Color.argb(255, 217, 217, 217);
+
+        private static final float STROKE_WIDTH = 4f;
+        private static final float RADIO_SIZE = 1f;
+        private static final float CIRCLE_SIZE = 0.25f;
+
+        private static final float TEXT_PADDING = 25f;
+        private static final float CLICK_PADDING = 20;
+
+        public CustomRadioButton(int posx, int posy, int checkColor, int textColor, boolean checked, byte[] id, byte[] group, String text, float fontSize, boolean landscape, boolean readonly) {
             this.posx = posx;
             this.posy = posy;
             this.checkColor = checkColor;
@@ -1071,54 +1081,66 @@ public class MainActivity extends AppCompatActivity {
             this.id = id;
             this.group = group;
             this.text = text;
+            this.fontSize = fontSize;
+            this.landscape = landscape;
+            this.readonly = readonly;
         }
 
         @Override
         public byte[] getID() { return id; }
         @Override
         public void draw(Canvas canvas, Paint paint, float baseFontSize) {
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(2f);
-            paint.setTextSize(baseFontSize * fontSize);
-            paint.setColor(checkColor);
-            canvas.drawArc(new RectF(posx, posy, posx + RADIO_WIDTH, posy + RADIO_WIDTH),
-                    0, 360, false, paint);
+            canvas.save();
+            canvas.translate(posx, posy);
+            if (landscape) canvas.rotate(90);
 
+            float size = baseFontSize * fontSize;
+            float w = size * RADIO_SIZE;
+            boxW = boxH = w;
+            RectF base = new RectF(0, 0, w, w);
+
+            paint.setColor(checked ? checkColor : UNCHECKED_COLOR);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(STROKE_WIDTH);
+            canvas.drawArc(base, 0, 360, false, paint);
             if (checked) {
+                RectF r = inflate(new RectF(w / 2, w / 2, w / 2, w / 2), size * CIRCLE_SIZE);
                 paint.setStyle(Paint.Style.FILL);
-                canvas.drawArc(new RectF(posx + RADIO_INSET, posy + RADIO_INSET, posx + RADIO_WIDTH - RADIO_INSET, posy + RADIO_WIDTH - RADIO_INSET),
-                        0, 360, false, paint);
+                canvas.drawArc(r, 0, 360, false, paint);
             }
 
-            Rect textBounds = new Rect();
-            paint.getTextBounds(text, 0, text.length(), textBounds);
-
+            paint.setTextSize(size);
+            paint.setTextAlign(Paint.Align.LEFT);
             paint.setColor(textColor);
             paint.setStyle(Paint.Style.FILL);
-            paint.setTextAlign(Paint.Align.LEFT);
-            canvas.drawText(text, posx + RADIO_WIDTH + 17, posy + ((float)RADIO_WIDTH + textBounds.height() - 10) / 2, paint);
+            canvas.drawText(text, boxW + TEXT_PADDING, (boxH + size) / 2.375f, paint);
+
+            canvas.restore();
         }
-        
+
         @Override
         public boolean containsPoint(int x, int y) {
-            return x >= posx - RADIO_PADDING && y >= posy - RADIO_PADDING &&
-                    x <= posx + RADIO_WIDTH + RADIO_PADDING && y <= posy + RADIO_WIDTH + RADIO_PADDING;
+            if (boxW == 0 && boxH == 0) return false;
+            RectF base = new RectF(posx, posy, posx + boxW, posy + boxH);
+            return inflate(landscape ? rotate(base) : base, CLICK_PADDING).contains(x, y);
         }
         @Override
         public void handleMouseDown(View view, MainActivity context, int x, int y) {
-            // set state to true and uncheck every other radiobutton in the same group
-            checked = true;
-            for (ICustomControl other : context.customControls) {
-                if (other != this && other instanceof CustomRadioButton) {
-                    CustomRadioButton b = (CustomRadioButton)other;
-                    if (Arrays.equals(b.group, this.group)) b.checked = false;
+            if (!readonly) {
+                // set state to true and uncheck every other radiobutton in the same group
+                checked = true;
+                for (ICustomControl other : context.customControls) {
+                    if (other != this && other instanceof CustomRadioButton) {
+                        CustomRadioButton b = (CustomRadioButton) other;
+                        if (Arrays.equals(b.group, this.group)) b.checked = false;
+                    }
                 }
+
+                try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte) 'b').put(id).array(), netsbloxAddress); }
+                catch (Exception ignored) { }
+
+                view.playSoundEffect(SoundEffectConstants.CLICK);
             }
-
-            try { if (netsbloxAddress != null) netsbloxSend(ByteBuffer.allocate(1 + id.length).put((byte)'b').put(id).array(), netsbloxAddress); }
-            catch (Exception ignored) {}
-
-            view.playSoundEffect(SoundEffectConstants.CLICK);
         }
         @Override
         public void handleMouseMove(View view, MainActivity context, int x, int y) { }
@@ -1128,7 +1150,10 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public boolean getToggleState() { return checked; }
         @Override
-        public void setToggleState(boolean val) { checked = val; }
+        public void setToggleState(boolean val) {
+            checked = val;
+            redrawCustomControls(false);
+        }
 
         @Override
         public String getText() { return text; }
@@ -1701,25 +1726,28 @@ public class MainActivity extends AppCompatActivity {
                                 break;
                             }
                             case 'y': { // add custom radiobutton control
-                                if (packet.getLength() < 27) continue;
+                                if (packet.getLength() < 33) continue;
                                 float x = floatFromBEBytes(buf, 9);
                                 float y = floatFromBEBytes(buf, 13);
                                 int checkColor = intFromBEBytes(buf, 17);
                                 int textColor = intFromBEBytes(buf, 21);
-                                boolean state = buf[25] != 0;
-                                int idlen = (int)buf[26] & 0xff;
-                                if (packet.getLength() < 27 + idlen + 1) continue;
-                                byte[] id = Arrays.copyOfRange(buf, 27, 27 + idlen);
-                                int grouplen = (int)buf[27 + idlen] & 0xff;
-                                if (packet.getLength() < 27 + idlen + 1 + grouplen) continue;
-                                byte[] group = Arrays.copyOfRange(buf, 27 + idlen + 1, 27 + idlen + 1 + grouplen);
-                                String text = new String(buf, 27 + idlen + 1 + grouplen, packet.getLength() - (27 + idlen + 1 + grouplen), "UTF-8");
+                                float fontSize = floatFromBEBytes(buf, 25);
+                                boolean state = buf[29] != 0;
+                                boolean landscape = buf[30] != 0;
+                                boolean readonly = buf[31] != 0;
+                                int idlen = (int)buf[32] & 0xff;
+                                if (packet.getLength() < 33 + idlen + 1) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 33, 33 + idlen);
+                                int grouplen = (int)buf[33 + idlen] & 0xff;
+                                if (packet.getLength() < 33 + idlen + 1 + grouplen) continue;
+                                byte[] group = Arrays.copyOfRange(buf, 33 + idlen + 1, 33 + idlen + 1 + grouplen);
+                                String text = new String(buf, 33 + idlen + 1 + grouplen, packet.getLength() - (33 + idlen + 1 + grouplen), "UTF-8");
 
                                 ImageView view = findViewById(R.id.controlPanel);
                                 int viewWidth = view.getWidth(), viewHeight = view.getHeight();
                                 ICustomControl control = new CustomRadioButton(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
-                                        checkColor, textColor, state, id, group, text);
+                                        checkColor, textColor, state, id, group, text, fontSize, landscape, readonly);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
