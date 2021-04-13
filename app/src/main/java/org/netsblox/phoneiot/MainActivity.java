@@ -601,9 +601,8 @@ public class MainActivity extends AppCompatActivity {
         }
         private void sendEvent() {
             try {
-                float x = landscape ? stickY : stickX;
-                float y = landscape ? stickX : -stickY;
-                netsbloxSend(ByteBuffer.allocate(13 + id.length).put((byte)'K').putInt(timeIndex++).putFloat(x).putFloat(y).put(id).array(), netsbloxAddress);
+                float[] vec = getVector();
+                netsbloxSend(ByteBuffer.allocate(13 + id.length).put((byte)'K').putInt(timeIndex++).putFloat(vec[0]).putFloat(vec[1]).put(id).array(), netsbloxAddress);
             }
             catch (Exception ignored) {}
         }
@@ -619,7 +618,9 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public float[] getVector() {
-            return new float[] { stickX, stickY };
+            float x = landscape ? stickY : stickX;
+            float y = landscape ? stickX : -stickY;
+            return new float[]{x, y};
         }
     }
 
