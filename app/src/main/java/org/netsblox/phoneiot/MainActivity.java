@@ -62,17 +62,20 @@ import com.google.android.gms.location.LocationSettingsResponse;
 import com.google.android.gms.location.SettingsClient;
 import com.google.android.gms.tasks.Task;
 import com.google.android.material.navigation.NavigationView;
-import org.netsblox.phoneiot.R;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
+import java.net.URL;
 import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -82,6 +85,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
+import java.util.regex.Pattern;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -1312,7 +1316,7 @@ public class MainActivity extends AppCompatActivity {
 
     private final Random rand = new Random();
 
-    private static final int SERVER_PORT = 1976;
+    private static final int DEFAULT_SERVER_PORT = 1976;
     private static final int UDP_PORT = 8888;
     private SocketAddress netsbloxAddress = null; // target for heartbeat comms - can be changed at will
     private DatagramSocket udpSocket = null;      // our socket for udp comms - do not close or change it
@@ -1338,6 +1342,41 @@ public class MainActivity extends AppCompatActivity {
             "editor.netsblox.org", "dev.netsblox.org",
             "24.11.247.254", "10.0.0.24", // temporary dev addresses for convenience
     };
+
+    private static Pattern IP_PATTERN = Pattern.compile("^(\\d+\\.){3}\\d+$");
+    boolean isIP(String addr) {
+        return IP_PATTERN.matcher(addr).matches();
+    }
+    String httpGet(String address) {
+        try {
+            System.err.printf("http get %s\n", address);
+
+            URL url = new URL(address);
+            HttpURLConnection conn = (HttpURLConnection)url.openConnection();
+            conn.setRequestMethod("GET");
+
+            StringBuilder b = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                for (String line; (line = reader.readLine()) != null; ) b.append(line);
+            }
+            return b.toString();
+        }
+        catch (Exception ex) {
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    private int getServerPort(String serverAddress) {
+        String target = isIP(serverAddress) ? serverAddress + ":8080" : serverAddress.startsWith("https://") ? serverAddress : "https://" + serverAddress;
+        String content = httpGet(target + "/services/routes/phone-iot/port");
+        try {
+            return Integer.parseInt(content);
+        }
+        catch (Exception ignored) {
+            System.err.println("getServerPort() failed - falling back to default port");
+            return DEFAULT_SERVER_PORT;
+        }
+    }
 
     // schedules a new toast to be shown for the given duration - this works from any calling thread
     private void scheduleToast(String msg, int duration) {
@@ -1399,7 +1438,8 @@ public class MainActivity extends AppCompatActivity {
                         reconnectRequest = null;
                         if (recon != null) {
                             try {
-                                SocketAddress temp = new InetSocketAddress(recon, SERVER_PORT);
+                                int port = getServerPort(recon);
+                                SocketAddress temp = new InetSocketAddress(recon, port);
                                 byte[] msg = netsbloxFormat(new byte[] { 'I', 0 }); // send a hearbeat with an ack request flag
 
                                 // check to make sure the address is good (send empty packet, which will trigger the server to send us an 'I' conn ack message)
