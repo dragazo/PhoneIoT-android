@@ -1410,6 +1410,8 @@ public class MainActivity extends AppCompatActivity {
 
     private void connectToServer() {
         if (udpSocket == null) {
+            System.err.printf("opening port %d\n", UDP_PORT);
+
             try { udpSocket = new DatagramSocket(UDP_PORT); }
             catch (Exception ex) {
                 Toast.makeText(this, String.format("Failed to open udp port %d: %s", UDP_PORT, ex.toString()), Toast.LENGTH_SHORT).show();
@@ -1955,6 +1957,15 @@ public class MainActivity extends AppCompatActivity {
         }
 
         finishInitialization();
+    }
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        System.err.println("destroying");
+
+        DatagramSocket sock = udpSocket;
+        if (sock != null) sock.close(); // close this so we can reuse the port
+        udpSocket = null;
     }
 
     private boolean canRunInBackground() {
