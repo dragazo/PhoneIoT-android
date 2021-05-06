@@ -14,6 +14,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.hardware.Sensor;
@@ -424,6 +425,10 @@ public class MainActivity extends AppCompatActivity {
         return new RectF(rect.left - padding, rect.top - padding, rect.right + padding, rect.bottom + padding);
     }
 
+    private static int applyAlpha(int color, float alpha) {
+        return (color & 0x00ffffff) | (Math.round(((color >> 24) & 0xff) * alpha) << 24);
+    }
+
     // ----------------------------------------------
 
     private interface ICustomControl {
@@ -441,8 +446,8 @@ public class MainActivity extends AppCompatActivity {
     private interface IPushable extends ICustomControl {
         boolean isPushed();
     }
-    private interface IJoystickLike extends ICustomControl {
-        float[] getVector();
+    private interface IPositionLike extends ICustomControl {
+        float[] getPos();
     }
     private interface IImageLike extends ICustomControl {
         Bitmap getImage();
@@ -547,11 +552,13 @@ public class MainActivity extends AppCompatActivity {
             redrawCustomControls(false);
         }
     }
-    private class CustomJoystick implements ICustomControl, IJoystickLike {
+    private class CustomJoystick implements ICustomControl, IPositionLike, IPushable {
         private int posx, posy, width;
         private int color;
         private final byte[] id;
         private boolean landscape;
+
+        private boolean pressed = false;
 
         private int timeIndex = 0; // time index for sending update events (used to ensure they don't receive them out of order)
         private float stickX = 0, stickY = 0; // these are [0, 1] values, which we scale up for the display
@@ -605,7 +612,7 @@ public class MainActivity extends AppCompatActivity {
         }
         private void sendEvent() {
             try {
-                float[] vec = getVector();
+                float[] vec = getPos();
                 netsbloxSend(ByteBuffer.allocate(13 + id.length).put((byte)'K').putInt(timeIndex++).putFloat(vec[0]).putFloat(vec[1]).put(id).array(), netsbloxAddress);
             }
             catch (Exception ignored) {}
@@ -613,18 +620,140 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void handleMouseDown(View view, MainActivity context, int x, int y) {
             view.playSoundEffect(SoundEffectConstants.CLICK);
+            pressed = true;
             updateStick(x, y);
         }
         @Override
-        public void handleMouseMove(View view, MainActivity context, int x, int y) { updateStick(x, y); }
+        public void handleMouseMove(View view, MainActivity context, int x, int y) {
+            updateStick(x, y);
+        }
         @Override
-        public void handleMouseUp(View view, MainActivity context) { stickX = 0; stickY = 0; sendEvent(); }
+        public void handleMouseUp(View view, MainActivity context) {
+            stickX = 0;
+            stickY = 0;
+            pressed = false;
+            sendEvent();
+        }
 
         @Override
-        public float[] getVector() {
+        public float[] getPos() {
             float x = landscape ? stickY : stickX;
             float y = landscape ? stickX : -stickY;
             return new float[]{x, y};
+        }
+        @Override
+        public boolean isPushed() {
+            return pressed;
+        }
+    }
+    private class CustomTouchpad implements ICustomControl, IPositionLike, IPushable {
+        private int posx, posy, width, height;
+        private int color, fillColor;
+        private final byte[] id;
+        private boolean landscape;
+
+        private static final float BACKGROUND_ALPHA = 0.4f;
+        private static final float STROKE_WIDTH = 4;
+        private static final float CURSOR_SIZE = 40;
+
+        private int timeIndex = 0; // time index for sending update events (used to ensure they don't receive them out of order)
+        private float cursorX = 0, cursorY = 0; // these are [0, 1] values, which we scale up for the display
+        private boolean cursorDown = false;
+
+        private static final long JOY_UPDATE_INTERVAL = 100; // so we don't spam the server with update messages, set a grace period where we won't send multiple messages
+        private long nextUpdateTimestamp = 0;
+
+        public CustomTouchpad(int posx, int posy, int width, int height, int color, byte[] id, boolean landscape) {
+            this.posx = posx;
+            this.posy = posy;
+            this.width = width;
+            this.height = height;
+            this.color = color;
+            this.fillColor = applyAlpha(color, BACKGROUND_ALPHA); // just compute this once
+            this.id = id;
+            this.landscape = landscape;
+        }
+
+        @Override
+        public byte[] getID() { return id; }
+        @Override
+        public void draw(Canvas canvas, Paint paint, float baseFontSize) {
+            canvas.save();
+            canvas.translate(posx, posy);
+            if (landscape) canvas.rotate(90);
+
+            RectF mainRect = new RectF(0, 0, width, height);
+            paint.setColor(fillColor);
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawRect(mainRect, paint);
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(STROKE_WIDTH);
+            canvas.drawRect(mainRect, paint);
+
+            if (cursorDown) {
+                float x = (cursorX + 1) * width / 2 - CURSOR_SIZE / 2;
+                float y = (cursorY + 1) * height / 2 - CURSOR_SIZE / 2;
+                paint.setStyle(Paint.Style.FILL);
+                canvas.drawArc(new RectF(x, y, x + CURSOR_SIZE, y + CURSOR_SIZE), 0, 360, false, paint);
+            }
+
+            canvas.restore();
+        }
+
+        @Override
+        public boolean containsPoint(int x, int y) {
+            RectF raw = new RectF(posx, posy, posx + width, posy + height);
+            RectF r = landscape ? rotate(raw) : raw;
+            return r.contains(x, y);
+        }
+        private void updateCursor(float x, float y, byte tag) {
+            PointF base = new PointF(x - posx, y - posy);
+            PointF corrected = landscape ? new PointF(base.y, -base.x) : base;
+            PointF fin = new PointF(2 * corrected.x / width - 1, 2 * corrected.y / height - 1);
+            if (fin.x < -1 || fin.x > 1 || fin.y < -1 || fin.y > 1) return;
+            cursorX = fin.x;
+            cursorY = fin.y;
+
+            long now = System.currentTimeMillis();
+            if (tag == 0 || now >= nextUpdateTimestamp) {
+                nextUpdateTimestamp = now + JOY_UPDATE_INTERVAL;
+                sendEvent(tag);
+            }
+        }
+        private void sendEvent(byte tag) {
+            try {
+                float[] vec = getPosRaw();
+                netsbloxSend(ByteBuffer.allocate(14 + id.length).put((byte)'n').putInt(timeIndex++).put(tag).putFloat(vec[0]).putFloat(vec[1]).put(id).array(), netsbloxAddress);
+            }
+            catch (Exception ignored) {}
+        }
+        @Override
+        public void handleMouseDown(View view, MainActivity context, int x, int y) {
+            view.playSoundEffect(SoundEffectConstants.CLICK);
+            cursorDown = true;
+            updateCursor(x, y, (byte)0);
+        }
+        @Override
+        public void handleMouseMove(View view, MainActivity context, int x, int y) {
+            updateCursor(x, y, (byte)1);
+        }
+        @Override
+        public void handleMouseUp(View view, MainActivity context) {
+            cursorDown = false;
+            sendEvent((byte)2);
+        }
+
+        private float[] getPosRaw() {
+            return new float[] { cursorX, -cursorY };
+        }
+        @Override
+        public float[] getPos() {
+            return cursorDown ? getPosRaw() : null;
+        }
+        @Override
+        public boolean isPushed() {
+            return cursorDown;
         }
     }
 
@@ -1564,14 +1693,15 @@ public class MainActivity extends AppCompatActivity {
                                 }
                                 break;
                             }
-                            case 'J': { // get joystick vector
+                            case 'J': { // get position
                                 if (packet.getLength() < 9) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
-                                IJoystickLike target = (IJoystickLike)getCustomControlWithIDWhere(id, c -> c instanceof IJoystickLike);
+                                IPositionLike target = (IPositionLike)getCustomControlWithIDWhere(id, c -> c instanceof IPositionLike);
                                 if (target == null) netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
                                 else {
-                                    float[] vec = target.getVector();
-                                    netsbloxSend(ByteBuffer.allocate(9).put(buf[0]).putFloat(vec[0]).putFloat(vec[1]).array(), packet.getSocketAddress());
+                                    float[] vec = target.getPos();
+                                    if (vec == null) netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                    else netsbloxSend(ByteBuffer.allocate(10).put(buf[0]).put((byte)1).putFloat(vec[0]).putFloat(vec[1]).array(), packet.getSocketAddress());
                                 }
                                 break;
                             }
@@ -1669,6 +1799,28 @@ public class MainActivity extends AppCompatActivity {
                                 ICustomControl control = new CustomJoystick(
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth),
+                                        color, id, landscape);
+                                netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
+                                break;
+                            }
+                            case 'N': { // add custom touchpad
+                                if (packet.getLength() < 31) continue;
+                                float x = floatFromBEBytes(buf, 9);
+                                float y = floatFromBEBytes(buf, 13);
+                                float width = floatFromBEBytes(buf, 17);
+                                float height = floatFromBEBytes(buf, 21);
+                                int color = intFromBEBytes(buf, 25);
+                                if (buf[29] == 1) {
+                                    height = width;
+                                }
+                                boolean landscape = buf[30] != 0;
+                                byte[] id = Arrays.copyOfRange(buf, 31, packet.getLength());
+
+                                ImageView view = findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth(), viewHeight = view.getHeight();
+                                ICustomControl control = new CustomTouchpad(
+                                        (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
+                                        (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
                                         color, id, landscape);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
