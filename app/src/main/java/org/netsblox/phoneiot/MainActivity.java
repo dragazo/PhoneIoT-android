@@ -429,6 +429,12 @@ public class MainActivity extends AppCompatActivity {
         return (color & 0x00ffffff) | (Math.round(((color >> 24) & 0xff) * alpha) << 24);
     }
 
+    private static PointF localPos(PointF global, RectF rect, boolean landscape) {
+        PointF base = new PointF(global.x - rect.left, global.y - rect.top);
+        PointF corrected = landscape ? new PointF(base.y, -base.x) : base;
+        return new PointF( corrected.x / rect.width(), corrected.y / rect.height());
+    }
+
     // ----------------------------------------------
 
     private interface ICustomControl {
@@ -448,6 +454,10 @@ public class MainActivity extends AppCompatActivity {
     }
     private interface IPositionLike extends ICustomControl {
         float[] getPos();
+    }
+    private interface ILevelLike extends ICustomControl {
+        float getLevel();
+        void setLevel(float value);
     }
     private interface IImageLike extends ICustomControl {
         Bitmap getImage();
@@ -595,7 +605,7 @@ public class MainActivity extends AppCompatActivity {
         public boolean containsPoint(int x, int y) {
             return ellipseContains(new RectF(posx, posy, posx + width, posy + width), x, y);
         }
-        private void updateStick(double x, double y) {
+        private void updateStick(double x, double y, byte tag) {
             double radius = width / 2.0;
             x -= posx + radius;
             y -= posy + radius;
@@ -605,15 +615,15 @@ public class MainActivity extends AppCompatActivity {
             stickY = (float)(y / radius);
 
             long now = System.currentTimeMillis();
-            if (now >= nextUpdateTimestamp) {
+            if (tag == 0 || now >= nextUpdateTimestamp) {
                 nextUpdateTimestamp = now + JOY_UPDATE_INTERVAL;
-                sendEvent();
+                sendEvent(tag);
             }
         }
-        private void sendEvent() {
+        private void sendEvent(byte tag) {
             try {
                 float[] vec = getPos();
-                netsbloxSend(ByteBuffer.allocate(13 + id.length).put((byte)'K').putInt(timeIndex++).putFloat(vec[0]).putFloat(vec[1]).put(id).array(), netsbloxAddress);
+                netsbloxSend(ByteBuffer.allocate(14 + id.length).put((byte)'n').putInt(timeIndex++).put(tag).putFloat(vec[0]).putFloat(vec[1]).put(id).array(), netsbloxAddress);
             }
             catch (Exception ignored) {}
         }
@@ -621,18 +631,18 @@ public class MainActivity extends AppCompatActivity {
         public void handleMouseDown(View view, MainActivity context, int x, int y) {
             view.playSoundEffect(SoundEffectConstants.CLICK);
             pressed = true;
-            updateStick(x, y);
+            updateStick(x, y, (byte)0);
         }
         @Override
         public void handleMouseMove(View view, MainActivity context, int x, int y) {
-            updateStick(x, y);
+            updateStick(x, y, (byte)1);
         }
         @Override
         public void handleMouseUp(View view, MainActivity context) {
             stickX = 0;
             stickY = 0;
             pressed = false;
-            sendEvent();
+            sendEvent((byte)2);
         }
 
         @Override
@@ -660,7 +670,7 @@ public class MainActivity extends AppCompatActivity {
         private float cursorX = 0, cursorY = 0; // these are [0, 1] values, which we scale up for the display
         private boolean cursorDown = false;
 
-        private static final long JOY_UPDATE_INTERVAL = 100; // so we don't spam the server with update messages, set a grace period where we won't send multiple messages
+        private static final long TOUCHPAD_UPDATE_INTERVAL = 100; // so we don't spam the server with update messages, set a grace period where we won't send multiple messages
         private long nextUpdateTimestamp = 0;
 
         public CustomTouchpad(int posx, int posy, int width, int height, int color, byte[] id, boolean landscape) {
@@ -708,16 +718,14 @@ public class MainActivity extends AppCompatActivity {
             return r.contains(x, y);
         }
         private void updateCursor(float x, float y, byte tag) {
-            PointF base = new PointF(x - posx, y - posy);
-            PointF corrected = landscape ? new PointF(base.y, -base.x) : base;
-            PointF fin = new PointF(2 * corrected.x / width - 1, 2 * corrected.y / height - 1);
-            if (fin.x < -1 || fin.x > 1 || fin.y < -1 || fin.y > 1) return;
-            cursorX = fin.x;
-            cursorY = fin.y;
+            PointF local = localPos(new PointF(x, y), new RectF(posx, posy, posx + width, posy + height), landscape);
+            if (local.x < 0 || local.x > 1 || local.y < 0 || local.y > 1) return;
+            cursorX = 2 * local.x - 1;
+            cursorY = 2 * local.y - 1;
 
             long now = System.currentTimeMillis();
             if (tag == 0 || now >= nextUpdateTimestamp) {
-                nextUpdateTimestamp = now + JOY_UPDATE_INTERVAL;
+                nextUpdateTimestamp = now + TOUCHPAD_UPDATE_INTERVAL;
                 sendEvent(tag);
             }
         }
@@ -750,6 +758,144 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public float[] getPos() {
             return cursorDown ? getPosRaw() : null;
+        }
+        @Override
+        public boolean isPushed() {
+            return cursorDown;
+        }
+    }
+
+    private enum SliderStyle {
+        Slider, Progress,
+    }
+    private class CustomSlider implements ICustomControl, ILevelLike, IPushable {
+        private float posx, posy, width;
+        private int color, alphaColor;
+        private float level;
+        private byte[] id;
+        private SliderStyle style;
+        private boolean landscape, readonly;
+
+        private int timeIndex = 0; // time index for sending update events (used to ensure they don't receive them out of order)
+        private boolean cursorDown = false;
+
+        private static final float CLICK_PADDING = 25;
+        private static final float BAR_HEIGHT = 20;
+        private static final float SLIDER_RADIUS = 20;
+        private static final float STROKE_WIDTH = 3;
+        private static final float FILL_ALPHA = 0.4f;
+
+        private static final long SLIDER_UPDATE_INTERVAL = 100; // so we don't spam the server with update messages, set a grace period where we won't send multiple messages
+        private long nextUpdateTimestamp = 0;
+
+        private CustomSlider(float x, float y, float width, int color, float level, byte[] id, SliderStyle style, boolean landscape, boolean readonly) {
+            this.posx = x;
+            this.posy = y;
+            this.width = width;
+            this.color = color;
+            this.alphaColor = applyAlpha(color, FILL_ALPHA);
+            this.level = Math.min(1, Math.max(0, level));
+            this.id = id;
+            this.style = style;
+            this.landscape = landscape;
+            this.readonly = readonly;
+        }
+
+        @Override
+        public byte[] getID() { return id; }
+        @Override
+        public void draw(Canvas canvas, Paint paint, float baseFontSize) {
+            canvas.save();
+            canvas.translate(posx, posy);
+            if (landscape) canvas.rotate(90);
+
+            RectF leftCap = new RectF(-BAR_HEIGHT / 2, 0, BAR_HEIGHT / 2, BAR_HEIGHT);
+            RectF rightCap = new RectF(width - BAR_HEIGHT / 2, 0, width + BAR_HEIGHT / 2, BAR_HEIGHT);
+
+            if (style == SliderStyle.Progress && level > 0) {
+                paint.setColor(alphaColor);
+                paint.setStyle(Paint.Style.FILL);
+
+                canvas.drawArc(leftCap, 90, 180, false, paint);
+                canvas.drawRect(0, 0, width * level, BAR_HEIGHT, paint);
+                if (level == 1) canvas.drawArc(rightCap, 270, 180, false, paint);
+            }
+
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(STROKE_WIDTH);
+            canvas.drawLine(0, 0, width, 0, paint);
+            canvas.drawLine(0, BAR_HEIGHT, width, BAR_HEIGHT, paint);
+            canvas.drawArc(leftCap, 90, 180, false, paint);
+            canvas.drawArc(rightCap, 270, 180, false, paint);
+
+            if (style == SliderStyle.Slider) {
+                PointF sliderPos = new PointF(width * level, BAR_HEIGHT / 2);
+                RectF r = inflate(new RectF(sliderPos.x, sliderPos.y, sliderPos.x, sliderPos.y), SLIDER_RADIUS);
+
+                paint.setColor(Color.WHITE);
+                paint.setStyle(Paint.Style.FILL);
+                canvas.drawArc(r, 0, 360, false, paint);
+                paint.setColor(alphaColor);
+                canvas.drawArc(r, 0, 360, false, paint);
+                paint.setColor(color);
+                paint.setStyle(Paint.Style.STROKE);
+                canvas.drawArc(r, 0, 360, false, paint);
+            }
+
+            canvas.restore();
+        }
+
+        @Override
+        public boolean containsPoint(int x, int y) {
+            if (readonly) return false;
+
+            RectF raw = new RectF(posx, posy, posx + width, posy + BAR_HEIGHT);
+            RectF r = landscape ? rotate(raw) : raw;
+            return inflate(r, CLICK_PADDING).contains(x, y);
+        }
+        private void updateCursor(float x, float y, byte tag) {
+            PointF local = localPos(new PointF(x, y), new RectF(posx, posy, posx + width, posy + BAR_HEIGHT), landscape);
+            float newLevel = Math.min(1, Math.max(0, local.x));
+            if (level == newLevel) return;
+            level = newLevel;
+
+            long now = System.currentTimeMillis();
+            if (tag == 0 || now >= nextUpdateTimestamp) {
+                nextUpdateTimestamp = now + SLIDER_UPDATE_INTERVAL;
+                sendEvent(tag);
+            }
+        }
+        private void sendEvent(byte tag) {
+            try {
+                netsbloxSend(ByteBuffer.allocate(10 + id.length).put((byte)'d').putInt(timeIndex++).put(tag).putFloat(level).put(id).array(), netsbloxAddress);
+            }
+            catch (Exception ignored) {}
+        }
+        @Override
+        public void handleMouseDown(View view, MainActivity context, int x, int y) {
+            view.playSoundEffect(SoundEffectConstants.CLICK);
+            cursorDown = true;
+            updateCursor(x, y, (byte)0);
+        }
+        @Override
+        public void handleMouseMove(View view, MainActivity context, int x, int y) {
+            updateCursor(x, y, (byte)1);
+        }
+        @Override
+        public void handleMouseUp(View view, MainActivity context) {
+            cursorDown = false;
+            sendEvent((byte)2);
+        }
+
+        @Override
+        public float getLevel() {
+            return level;
+        }
+        @Override
+        public void setLevel(float level) {
+            this.level = level;
+            redrawCustomControls(false);
         }
         @Override
         public boolean isPushed() {
@@ -1705,6 +1851,26 @@ public class MainActivity extends AppCompatActivity {
                                 }
                                 break;
                             }
+                            case 'E': { // get level
+                                if (packet.getLength() < 9) continue;
+                                byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
+                                ILevelLike target = (ILevelLike)getCustomControlWithIDWhere(id, c -> c instanceof ILevelLike);
+                                if (target == null) netsbloxSend(new byte[] { buf[0] }, packet.getSocketAddress());
+                                else netsbloxSend(ByteBuffer.allocate(5).put(buf[0]).putFloat(target.getLevel()).array(), packet.getSocketAddress());
+                                break;
+                            }
+                            case 'e': { // set level
+                                if (packet.getLength() < 13) continue;
+                                float level = floatFromBEBytes(buf, 9);
+                                byte[] id = Arrays.copyOfRange(buf, 13, packet.getLength());
+                                ILevelLike target = (ILevelLike)getCustomControlWithIDWhere(id, c -> c instanceof ILevelLike);
+                                if (target == null) netsbloxSend(new byte[] { buf[0], 3 }, packet.getSocketAddress());
+                                else {
+                                    target.setLevel(level);
+                                    netsbloxSend(new byte[] { buf[0], 0 }, packet.getSocketAddress());
+                                }
+                                break;
+                            }
                             case 'V': { // is pushed
                                 if (packet.getLength() < 9) continue;
                                 byte[] id = Arrays.copyOfRange(buf, 9, packet.getLength());
@@ -1822,6 +1988,31 @@ public class MainActivity extends AppCompatActivity {
                                         (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
                                         (int)(width / 100 * viewWidth), (int)(height / 100 * viewHeight),
                                         color, id, landscape);
+                                netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
+                                break;
+                            }
+                            case 'D': { // add custom slider
+                                if (packet.getLength() < 32) continue;
+                                float x = floatFromBEBytes(buf, 9);
+                                float y = floatFromBEBytes(buf, 13);
+                                float width = floatFromBEBytes(buf, 17);
+                                int color = intFromBEBytes(buf, 21);
+                                float level = floatFromBEBytes(buf, 25);
+                                SliderStyle style;
+                                switch (buf[29]) {
+                                    default: case 0: style = SliderStyle.Slider; break;
+                                    case 1: style = SliderStyle.Progress; break;
+                                }
+                                boolean landscape = buf[30] != 0;
+                                boolean readonly = buf[31] != 0;
+                                byte[] id = Arrays.copyOfRange(buf, 32, packet.getLength());
+
+                                ImageView view = findViewById(R.id.controlPanel);
+                                int viewWidth = view.getWidth(), viewHeight = view.getHeight();
+                                ICustomControl control = new CustomSlider(
+                                        (int)(x / 100 * viewWidth), (int)(y / 100 * viewHeight),
+                                        (int)(width / 100 * viewWidth),
+                                        color, level, id, style, landscape, readonly);
                                 netsbloxSend(new byte[] { buf[0], tryAddCustomControl(control) }, packet.getSocketAddress());
                                 break;
                             }
