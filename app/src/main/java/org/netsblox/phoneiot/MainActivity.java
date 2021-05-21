@@ -207,7 +207,8 @@ public class MainActivity extends AppCompatActivity {
     private static class OrientationCalculator implements BasicSensor {
         public final double[] data = new double[3];
 
-        private final float[] matrixBuffer = new float[9];
+        private final float[] R = new float[9];
+        private final float[] I = new float[9];
         private final float[] accelBuffer = new float[3];
         private final float[] magnetBuffer = new float[3];
 
@@ -226,10 +227,12 @@ public class MainActivity extends AppCompatActivity {
             for (int i = 0; i < 3; ++i) accelBuffer[i] = (float)accel.data[i];
             for (int i = 0; i < 3; ++i) magnetBuffer[i] = (float)magnet.data[i];
 
-            SensorManager.getRotationMatrix(matrixBuffer, null, accelBuffer, magnetBuffer);
-            SensorManager.getOrientation(matrixBuffer, accelBuffer); // store into this buffer temporarily
+            SensorManager.getRotationMatrix(R, I, accelBuffer, magnetBuffer);
+            SensorManager.getOrientation(R, accelBuffer); // store into this buffer temporarily
 
-            for (int i = 0; i < 3; ++i) data[i] = accelBuffer[i]; // an extract into real data array
+            data[0] = accelBuffer[0]; // an extract into real data array
+            data[1] = -accelBuffer[1];
+            data[2] = accelBuffer[2];
 
             return data;
         }
