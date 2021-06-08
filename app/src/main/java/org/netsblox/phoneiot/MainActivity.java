@@ -133,6 +133,8 @@ public class MainActivity extends AppCompatActivity {
     private static final int PERMISSIONS_REQUEST_CODE = 0x2301;
     private static final int CAMERA_REQUEST_CODE = 0x9901;
 
+    private static final double RAD_TO_DEG = 180.0 / Math.PI;
+
     // ------------------------------------
 
     private interface BasicSensor {
@@ -146,12 +148,18 @@ public class MainActivity extends AppCompatActivity {
         public final Sensor sensor;
         public final double[] data;
         public boolean supported;
+        private final double scale;
 
-        public SensorInfo(Sensor s, int dims) {
+        public SensorInfo(Sensor s, int dims, double scale) {
             sensor = s;
             data = new double[dims];
             supported = false;
+            this.scale = scale;
         }
+        public SensorInfo(Sensor s, int dims) {
+            this(s, dims, 1.0);
+        }
+
         public void start() {
             if (sensor != null) supported = sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_NORMAL);
         }
@@ -165,7 +173,7 @@ public class MainActivity extends AppCompatActivity {
 
             // copy over what we were given - anything we didn't get we set to zero (some sensors have optional values)
             int m = Math.min(data.length, newData.length);
-            for (int i = 0; i < m; ++i) data[i] = newData[i];
+            for (int i = 0; i < m; ++i) data[i] = scale * newData[i];
             for (int i = m; i < data.length; ++i) data[i] = 0;
         }
         @Override
@@ -230,9 +238,9 @@ public class MainActivity extends AppCompatActivity {
             SensorManager.getRotationMatrix(R, I, accelBuffer, magnetBuffer);
             SensorManager.getOrientation(R, accelBuffer); // store into this buffer temporarily
 
-            data[0] = accelBuffer[0]; // an extract into real data array
-            data[1] = -accelBuffer[1];
-            data[2] = accelBuffer[2];
+            data[0] = RAD_TO_DEG * accelBuffer[0]; // an extract into real data array
+            data[1] = RAD_TO_DEG * -accelBuffer[1];
+            data[2] = RAD_TO_DEG * accelBuffer[2];
 
             return data;
         }
@@ -2441,9 +2449,9 @@ public class MainActivity extends AppCompatActivity {
         // motion sensors
         accelerometer = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER), 3);
         gravity = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY), 3);
-        gyroscope = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE), 3);
+        gyroscope = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE), 3, RAD_TO_DEG);
         linearAcceleration = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION), 3);
-        rotationVector = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR), 4);
+        rotationVector = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR), 4, RAD_TO_DEG);
         stepCounter = new SensorInfo(Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT ? sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) : null, 1);
 
         // position sensors
