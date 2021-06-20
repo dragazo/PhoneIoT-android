@@ -48,6 +48,7 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.core.view.GravityCompat;
@@ -385,7 +386,15 @@ public class MainActivity extends AppCompatActivity {
     private long getPassword() {
         long nowtime = System.currentTimeMillis();
         if (nowtime < _passwordExpiry) return _rawPassword;
-        setPassword(rand.nextLong() & 0xffffffffL); // password is a 32-bit (positive) value
+
+        long t = 0;
+        for (;;) {
+            t = rand.nextLong() & 0xffffffffL; // password is a 32-bit (positive) value
+            String str = String.format("%08x", t);
+            if (isValidHexStr(str)) break;
+        }
+
+        setPassword(t);
         return _rawPassword;
     }
     private void setPassword(long pass) {
@@ -444,6 +453,10 @@ public class MainActivity extends AppCompatActivity {
         PointF base = new PointF(global.x - rect.left, global.y - rect.top);
         PointF corrected = landscape ? new PointF(base.y, -base.x) : base;
         return new PointF( corrected.x / rect.width(), corrected.y / rect.height());
+    }
+
+    private static boolean isValidHexStr(String str) {
+        return !str.matches("^[0-9]*e[0-9]*$");
     }
 
     // ----------------------------------------------
@@ -2289,6 +2302,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO); // night mode can make custom controls have black on black and be unreadable
 
         List<String> failedPermissions = new ArrayList<>();
         for (PermissionRequest r : getRequestedPermissions()) {
@@ -2401,7 +2415,13 @@ public class MainActivity extends AppCompatActivity {
         try { macInt = getPrefs().getLong(MAC_ADDR_PREF_NAME, -1); }
         catch (Exception ignored) { }
         if (macInt < 0) {
-            rand.nextBytes(macAddress); // generate a random fake mac addr (new versions of android no longer support getting the real one)
+            // generate a random fake mac addr (new versions of android no longer support getting the real one)
+            for (StringBuilder b = new StringBuilder(32);;) {
+                rand.nextBytes(macAddress);
+                b.setLength(0);
+                appendBytes(b, macAddress);
+                if (isValidHexStr(b.toString())) break;
+            }
 
             // cache the generated value in preferences (so multiple application starts have the same id)
             macInt = 0;
