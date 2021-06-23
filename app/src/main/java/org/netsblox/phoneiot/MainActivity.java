@@ -87,6 +87,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.regex.Pattern;
 
 public class MainActivity extends AppCompatActivity {
@@ -1707,6 +1709,10 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void requestConnReset() {
+        try { if (netsbloxAddress != null) netsbloxSend(new byte[] { (byte)'I', 86 }, netsbloxAddress); }
+        catch (Exception ignored) {}
+    }
     private void connectToServer() {
         if (udpSocket == null) {
             System.err.printf("opening port %d\n", UDP_PORT);
@@ -1765,11 +1771,24 @@ public class MainActivity extends AppCompatActivity {
                         // IMPORTANT: short timeout is also important for the sleep no-communications mode (otherwise we might leak one instruction through after arbitrary time).
                         udpSocket.setSoTimeout(1000);
                         udpSocket.receive(packet);
+                        if (packet.getLength() == 0) continue;
 
                         // check for things that don't need auth
-                        if (packet.getLength() == 1 && buf[0] == 'I') { // connection acknowledgment
-                            scheduleToast("connected to server", Toast.LENGTH_SHORT);
-                            continue;
+                        if (packet.getLength() <= 2 && buf[0] == 'I') {
+                            if (packet.getLength() == 1 || (packet.getLength() == 2 && buf[1] == 1)) { // len 1 is back compat with server - eventually not needed
+                                scheduleToast("Connected to NetsBlox", Toast.LENGTH_SHORT);
+                                continue;
+                            }
+                            else if (packet.getLength() == 2 && buf[1] == 87) {
+                                scheduleToast("Connection Reset", Toast.LENGTH_SHORT);
+                                new Timer().schedule(new TimerTask() {
+                                    @Override
+                                    public void run() {
+                                        connectToServer();
+                                    }
+                                }, 3000);
+                                continue;
+                            }
                         }
 
                         // ignore anything that's invalid or fails to auth
@@ -2253,7 +2272,7 @@ public class MainActivity extends AppCompatActivity {
         return expanded;
     }
     private void netsbloxSend(byte[] content, SocketAddress dest) {
-        if (udpSocket != null) {
+        if (udpSocket != null && dest != null) {
             byte[] expanded = netsbloxFormat(content);
             DatagramPacket packet = new DatagramPacket(expanded, expanded.length, dest);
             synchronized (pipeQueue) {
@@ -2303,6 +2322,8 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO); // night mode can make custom controls have black on black and be unreadable
+
+        openDrawerButton(null); // start with menu open
 
         List<String> failedPermissions = new ArrayList<>();
         for (PermissionRequest r : getRequestedPermissions()) {
@@ -2621,6 +2642,10 @@ public class MainActivity extends AppCompatActivity {
         getNavigationView(R.id.serverHostText).clearFocus(); // do this so we don't have a blinking cursor for all of eternity
         connectToServer();
     }
+    public void connResetButtonPress(View view) {
+        getNavigationView(R.id.serverHostText).clearFocus(); // do this so we don't have a blinking cursor for all of eternity
+        requestConnReset();
+    }
     public void openDrawerButton(View view) {
         DrawerLayout nav = findViewById(R.id.drawerLayout);
         nav.openDrawer(GravityCompat.START);
@@ -2642,7 +2667,9 @@ public class MainActivity extends AppCompatActivity {
         if (on) {
             new AlertDialog.Builder(this)
                     .setTitle("Info")
-                    .setMessage("To fully run in the background, you may need to disable battery optimizations for PhoneIoT. Additionally, some versions of Android limit access to sensors while in the background.")
+                    .setMessage("Note: this is an experimental feature and may not function correctly on all devices.\n\n" +
+                            "Due to accessing sensor data, running in the background can consume a lot of power if you forget to close the app." +
+                            " Additionally, if location is enabled, it may still be tracked while running in the background.")
                     .setIcon(android.R.drawable.ic_dialog_info)
                     .setPositiveButton(android.R.string.ok, null)
                     .show();
