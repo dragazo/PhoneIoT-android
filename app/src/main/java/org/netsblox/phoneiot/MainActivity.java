@@ -319,12 +319,19 @@ public class MainActivity extends AppCompatActivity {
         private final MediaRecorder recorder = new MediaRecorder();
         private final Handler handler = new Handler();
 
+        private Context cachedContext = null;
+
         public SoundSensor() {
             new Runnable() {
                 @Override
                 public void run() {
                     if (supported) {
-                        try { data[0] = (float) recorder.getMaxAmplitude() / NORMALIZATION_FACTOR; }
+                        try { data[0] = (float)recorder.getMaxAmplitude() / NORMALIZATION_FACTOR; }
+                        catch (IllegalStateException ex) {
+                            System.err.printf("sound sensor illegal state: %s\nattempting sound sensor restart\n", ex);
+                            supported = false; // mark as not supported until we successfully restart
+                            start(cachedContext);
+                        }
                         catch (Exception ignore) { }
                     }
                     handler.postDelayed(this, SAMPLE_RATE);
@@ -332,6 +339,7 @@ public class MainActivity extends AppCompatActivity {
             }.run();
         }
         public void start(Context context) {
+            cachedContext = context;
             try {
                 recorder.reset();
                 recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
@@ -351,6 +359,7 @@ public class MainActivity extends AppCompatActivity {
                 recorder.prepare();
                 recorder.start();
                 supported = true;
+                System.err.println("microphone started");
             }
             catch (Exception ex) {
                 supported = false;
