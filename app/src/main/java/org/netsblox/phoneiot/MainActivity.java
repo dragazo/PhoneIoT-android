@@ -1622,6 +1622,7 @@ public class MainActivity extends AppCompatActivity {
     // ----------------------------------------------
 
     private static final String MAC_ADDR_PREF_NAME = "MAC_ADDR"; // name to use for mac addr in stored app preferences
+    private static final String SERVER_ADDR_PREF_NAME = "SERVER_ADDR";
     private static final String RUN_IN_BACKGROUND_PREF_NAME = "RUN_IN_BACKGROUND";
 
     private final Random rand = new Random();
@@ -1650,7 +1651,6 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String[] KNOWN_SERVERS = new String[] {
             "editor.netsblox.org", "dev.netsblox.org",
-            "24.11.247.254", "10.0.0.24", // temporary dev addresses for convenience
     };
 
     private static Pattern IP_PATTERN = Pattern.compile("^(\\d+\\.){3}\\d+$");
@@ -2442,7 +2442,7 @@ public class MainActivity extends AppCompatActivity {
     }
     private void loadPrefId() {
         long macInt = -1;
-        try { macInt = getPrefs().getLong(MAC_ADDR_PREF_NAME, -1); }
+        try { macInt = getPrefs().getLong(MAC_ADDR_PREF_NAME, macInt); }
         catch (Exception ignored) { }
         if (macInt < 0) {
             // generate a random fake mac addr (new versions of android no longer support getting the real one)
@@ -2469,9 +2469,21 @@ public class MainActivity extends AppCompatActivity {
         appendBytes(b, macAddress);
         title.setText(b.toString());
     }
+    private void loadPrefServerAddr() {
+        String addr = "netsblox.org";
+        try { addr = getPrefs().getString(SERVER_ADDR_PREF_NAME, addr); }
+        catch (Exception ignored) { ignored.printStackTrace(); }
+
+        EditText text = (EditText)getNavigationView(R.id.serverHostText);
+        text.setText(addr);
+    }
+    private void savePrefServerAddr() {
+        String val = ((EditText)getNavigationView(R.id.serverHostText)).getText().toString();
+        getPrefs().edit().putString(SERVER_ADDR_PREF_NAME, val).apply();
+    }
     void loadPrefRunInBackground() {
         boolean res = false;
-        try { res = getPrefs().getBoolean(RUN_IN_BACKGROUND_PREF_NAME, false); }
+        try { res = getPrefs().getBoolean(RUN_IN_BACKGROUND_PREF_NAME, res); }
         catch (Exception ignored) { }
 
         Switch toggle = (Switch)getNavigationView(R.id.runInBackgroundSwitch);
@@ -2481,6 +2493,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean postInitializationComplete = false; // marks that we've finished everything and are ready for user interaction
     private void finishInitialization() {
         loadPrefId();
+        loadPrefServerAddr();
         loadPrefRunInBackground();
 
         //invalidatePassword();
@@ -2490,7 +2503,6 @@ public class MainActivity extends AppCompatActivity {
         AutoCompleteTextView serverBox = (AutoCompleteTextView)getNavigationView(R.id.serverHostText);
         serverBox.setThreshold(1);
         serverBox.setAdapter(completionAdapter);
-        serverBox.setText(KNOWN_SERVERS[0]); // auto fill in the first option
 
         // --------------------------------------------------
 
@@ -2649,10 +2661,12 @@ public class MainActivity extends AppCompatActivity {
 
     public void serverConnectButtonPress(View view) {
         getNavigationView(R.id.serverHostText).clearFocus(); // do this so we don't have a blinking cursor for all of eternity
+        savePrefServerAddr(); // save addr on button press
         connectToServer();
     }
     public void connResetButtonPress(View view) {
         getNavigationView(R.id.serverHostText).clearFocus(); // do this so we don't have a blinking cursor for all of eternity
+        savePrefServerAddr(); // save addr on button press
         requestConnReset();
     }
     public void openDrawerButton(View view) {
