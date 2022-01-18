@@ -30,6 +30,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.preference.PreferenceManager;
 import android.provider.MediaStore;
 import android.text.StaticLayout;
@@ -187,6 +188,35 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public double[] getData() { return data; }
     }
+
+    // ----------------------------------------------
+
+    private class BackgroundRunner {
+        private PowerManager.WakeLock lock;
+        private boolean locked;
+
+        BackgroundRunner() {
+            PowerManager powerManager = (PowerManager)getSystemService(POWER_SERVICE);
+            lock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PhoneIoT::BackgroundRunner");
+            locked = false;
+        }
+
+        // these return the previous running state
+        synchronized boolean start() {
+            if (locked) return true;
+            lock.acquire();
+            locked = true;
+            return false;
+        }
+        synchronized boolean stop() {
+            if (!locked) return false;
+            lock.release();
+            locked = false;
+            return true;
+        }
+    }
+
+    private BackgroundRunner backgroundRunner;
 
     // ----------------------------------------------
 
@@ -2332,6 +2362,8 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO); // night mode can make custom controls have black on black and be unreadable
 
+        backgroundRunner = new BackgroundRunner();
+
         openDrawerButton(null); // start with menu open
 
         List<String> failedPermissions = new ArrayList<>();
@@ -2563,14 +2595,22 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (postInitializationComplete) startSensors();
         System.err.println("resuming");
+
+        if (postInitializationComplete) {
+            // stop background running - if it wasn't running, restart the sensors
+            if (!backgroundRunner.stop()) startSensors();
+        }
     }
     @Override
     protected void onPause() {
         super.onPause();
-        if (postInitializationComplete && !canRunInBackground()) stopSensors();
         System.err.println("pausing");
+
+        if (postInitializationComplete) {
+            if (canRunInBackground()) backgroundRunner.start();
+            else stopSensors();
+        }
     }
 
     private static void appendBytes(StringBuilder b, byte[] bytes) {
