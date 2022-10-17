@@ -744,7 +744,6 @@ public class MainActivity extends AppCompatActivity {
             this.width = width;
             this.height = height;
             this.color = color;
-            this.fillColor = applyAlpha(color, BACKGROUND_ALPHA); // just compute this once
             this.id = id;
             this.landscape = landscape;
         }
@@ -758,7 +757,7 @@ public class MainActivity extends AppCompatActivity {
             if (landscape) canvas.rotate(90);
 
             RectF mainRect = new RectF(0, 0, width, height);
-            paint.setColor(fillColor);
+            paint.setColor(applyAlpha(color, BACKGROUND_ALPHA));
             paint.setStyle(Paint.Style.FILL);
             canvas.drawRect(mainRect, paint);
             paint.setColor(color);
@@ -769,6 +768,7 @@ public class MainActivity extends AppCompatActivity {
             if (cursorDown) {
                 float x = (cursorX + 1) * width / 2 - CURSOR_SIZE / 2;
                 float y = (cursorY + 1) * height / 2 - CURSOR_SIZE / 2;
+                paint.setColor(color | 0xff000000); // cursor is always opaque even if touchpad is transparent
                 paint.setStyle(Paint.Style.FILL);
                 canvas.drawArc(new RectF(x, y, x + CURSOR_SIZE, y + CURSOR_SIZE), 0, 360, false, paint);
             }
@@ -858,7 +858,6 @@ public class MainActivity extends AppCompatActivity {
             this.posy = y;
             this.width = width;
             this.color = color;
-            this.alphaColor = applyAlpha(color, FILL_ALPHA);
             this.level = Math.min(1, Math.max(0, level));
             this.id = id;
             this.style = style;
@@ -878,7 +877,7 @@ public class MainActivity extends AppCompatActivity {
             RectF rightCap = new RectF(width - BAR_HEIGHT / 2, 0, width + BAR_HEIGHT / 2, BAR_HEIGHT);
 
             if (style == SliderStyle.Progress && level > 0) {
-                paint.setColor(alphaColor);
+                paint.setColor(applyAlpha(color, FILL_ALPHA));
                 paint.setStyle(Paint.Style.FILL);
 
                 canvas.drawArc(leftCap, 90, 180, false, paint);
@@ -998,6 +997,7 @@ public class MainActivity extends AppCompatActivity {
         private int posx, posy, width, height;
         private final byte[] id;
         private Bitmap img;
+        private final Object imgLock = new Object();
         private boolean readonly;
         private boolean landscape;
         private FitType fit;
@@ -1031,9 +1031,11 @@ public class MainActivity extends AppCompatActivity {
                 canvas.save();
                 canvas.clipRect(mainRect);
 
-                Rect src = new Rect(0, 0, img.getWidth(), img.getHeight());
-                RectF dest = fitRect(img, mainRect, fit);
-                canvas.drawBitmap(img, src, dest, paint);
+                synchronized (imgLock) {
+                    Rect src = new Rect(0, 0, img.getWidth(), img.getHeight());
+                    RectF dest = fitRect(img, mainRect, fit);
+                    canvas.drawBitmap(img, src, dest, paint);
+                }
 
                 canvas.restore();
             }
@@ -1063,12 +1065,18 @@ public class MainActivity extends AppCompatActivity {
         public void handleMouseUp(View view, MainActivity context) { }
 
         @Override
-        public Bitmap getImage() { return img; }
+        public Bitmap getImage() {
+            synchronized (imgLock) {
+                return img;
+            }
+        }
         @Override
         public void setImage(Bitmap newimg, boolean recycleOld) {
-            if (newimg == img) return;
-            if (recycleOld) img.recycle();
-            img = newimg;
+            synchronized (imgLock) {
+                if (newimg == img) return;
+                if (recycleOld) img.recycle();
+                img = newimg;
+            }
             redrawCustomControls(false);
         }
     }
