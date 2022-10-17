@@ -3,6 +3,8 @@ package org.netsblox.phoneiot;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.PendingIntent;
+import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -29,6 +31,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.preference.PreferenceManager;
@@ -50,6 +53,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
+import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.core.view.GravityCompat;
@@ -148,21 +152,73 @@ public class MainActivity extends AppCompatActivity {
 
     // ------------------------------------
 
-    private class SensorInfo implements SensorEventListener, BasicSensor {
+    // source (for notification stuff): https://stackoverflow.com/questions/60149159/android-sensors-dont-gather-data-when-phone-is-idle
+//    private class BackgroundSensors extends Service {
+//        private static final int ID = 2853954;
+//        private NotificationCompat.Builder notificationBuilder;
+//        private PendingIntent pendingIntent;
+//
+//        @Override
+//        public int onStartCommand(Intent intent, int flags, int startId) {
+//            notificationBuilder = createNotificationBuilder();
+//            showNotification();
+//
+//            // register sensors
+//
+//            return START_REDELIVER_INTENT;
+//        }
+//        @Override
+//        public void onDestroy() {
+//            dismissNotification();
+//            super.onDestroy();
+//        }
+//
+//        @Nullable
+//        @Override
+//        public IBinder onBind(Intent intent) {
+//            return null;
+//        }
+//
+//        private void showNotification() {
+//            notificationBuilder.setContentText("PhoneIoT - Listening to sensors");
+//            startForeground(ID, notificationBuilder.build());
+//        }
+//
+//        private NotificationCompat.Builder createNotificationBuilder() {
+//            if (pendingIntent == null) {
+//                Intent notificationIntent = new Intent(this, MainActivity.class);
+//                notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+//                notificationIntent.putExtra("ticket_flag", Intent.FLAG_TICKET_RUNNING);
+//            }
+//        }
+//    }
+
+    // ------------------------------------
+
+    private class SensorInfo extends Service implements SensorEventListener, BasicSensor {
         public final Sensor sensor;
         public final double[] data;
         public boolean supported;
         private final double scale;
 
-        public SensorInfo(Sensor s, int dims, double scale) {
-            sensor = s;
-            data = new double[dims];
-            supported = false;
+        public SensorInfo(Context context, Sensor s, int dims, double scale) {
+            this.sensor = s;
+            this.data = new double[dims];
+            this.supported = false;
             this.scale = scale;
+
+            Intent intent = new Intent(context, SensorInfo.class);
+            ContextCompat.startForegroundService(context, intent);
         }
-        public SensorInfo(Sensor s, int dims) {
-            this(s, dims, 1.0);
+        public SensorInfo(Context context, Sensor s, int dims) {
+            this(context, s, dims, 1.0);
         }
+
+        // --------------------------------------------
+
+        public IBinder onBind(Intent intent) { return null; }
+
+        // --------------------------------------------
 
         public void start() {
             if (sensor != null) supported = sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_NORMAL);
@@ -182,6 +238,8 @@ public class MainActivity extends AppCompatActivity {
         }
         @Override
         public void onAccuracyChanged(Sensor sensor, int accuracy) {}
+
+        // -----------------------------------------------
 
         @Override
         public boolean isSupported() { return supported; }
@@ -2541,24 +2599,24 @@ public class MainActivity extends AppCompatActivity {
         sensorManager = (SensorManager)getSystemService(Context.SENSOR_SERVICE);
 
         // motion sensors
-        accelerometer = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER), 3);
-        gravity = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY), 3);
-        gyroscope = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE), 3, RAD_TO_DEG);
-        linearAcceleration = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION), 3);
-        rotationVector = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR), 4, RAD_TO_DEG);
-        stepCounter = new SensorInfo(Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT ? sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) : null, 1);
+        accelerometer = new SensorInfo(this, sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER), 3);
+        gravity = new SensorInfo(this, sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY), 3);
+        gyroscope = new SensorInfo(this, sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE), 3, RAD_TO_DEG);
+        linearAcceleration = new SensorInfo(this, sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION), 3);
+        rotationVector = new SensorInfo(this, sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR), 4, RAD_TO_DEG);
+        stepCounter = new SensorInfo(this, Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT ? sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) : null, 1);
 
         // position sensors
-        gameRotationVector = new SensorInfo(Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2 ? sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR) : null, 3);
-        geomagneticRotationVector = new SensorInfo(Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT ? sensorManager.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR) : null, 3);
-        magneticField = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD), 3);
-        proximity = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY), 1);
+        gameRotationVector = new SensorInfo(this, Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2 ? sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR) : null, 3);
+        geomagneticRotationVector = new SensorInfo(this, Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT ? sensorManager.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR) : null, 3);
+        magneticField = new SensorInfo(this, sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD), 3);
+        proximity = new SensorInfo(this, sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY), 1);
 
         // environment sensors
-        ambientTemperature = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE), 1);
-        light = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT), 1);
-        pressure = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE), 1);
-        relativeHumidity = new SensorInfo(sensorManager.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY), 1);
+        ambientTemperature = new SensorInfo(this, sensorManager.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE), 1);
+        light = new SensorInfo(this, sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT), 1);
+        pressure = new SensorInfo(this, sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE), 1);
+        relativeHumidity = new SensorInfo(this, sensorManager.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY), 1);
 
         // misc sensors
         orientationCalculator = new OrientationCalculator(accelerometer, magneticField);
