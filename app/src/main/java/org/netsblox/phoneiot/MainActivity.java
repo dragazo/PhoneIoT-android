@@ -1858,6 +1858,9 @@ public class MainActivity extends AppCompatActivity {
                             case 'P': handleSensor.apply(proximity); break;
                             case 'S': handleSensor.apply(stepCounter); break;
                             case 'l': handleSensor.apply(light); break;
+                            case 'F': handleSensor.apply(pressure); break;
+                            case 'f': handleSensor.apply(ambientTemperature); break;
+                            case 'K': handleSensor.apply(relativeHumidity); break;
                             case 'X': handleSensor.apply(location); break;
                             case 'O': handleSensor.apply(orientationCalculator); break;
 
@@ -2287,6 +2290,7 @@ public class MainActivity extends AppCompatActivity {
                 BasicSensor[] sensors = {
                         accelerometer, gravity, linearAcceleration, gyroscope, rotationVector, gameRotationVector,
                         magneticField, soundSensor, proximity, stepCounter, light, location, orientationCalculator,
+                        pressure, ambientTemperature, relativeHumidity,
                 };
                 writer.write(prefix);
                 writer.writeInt(timestamp);
