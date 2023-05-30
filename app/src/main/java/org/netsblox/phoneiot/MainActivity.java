@@ -1139,7 +1139,7 @@ public class MainActivity extends AppCompatActivity {
                 layout.draw(canvas);
                 canvas.restore();
             }
-            else canvas.drawText(text, posx, posy, paint);
+            else canvas.drawText(text, 0, textBounds.height() - 6, paint);
 
             canvas.restore();
         }
@@ -1229,7 +1229,12 @@ public class MainActivity extends AppCompatActivity {
             Rect textBounds = new Rect();
             paint.getTextBounds(text, 0, text.length(), textBounds);
 
-            canvas.drawText(text, 0, textBounds.height() - 6, paint);
+            if (Build.VERSION.SDK_INT >= 23) {
+                TextPaint textPaint = new TextPaint(paint);
+                StaticLayout layout = StaticLayout.Builder.obtain(text, 0, text.length(), textPaint, Integer.MAX_VALUE).build();
+                layout.draw(canvas);
+            }
+            else canvas.drawText(text, 0, textBounds.height() - 6, paint);
 
             canvas.restore();
         }
@@ -2514,7 +2519,7 @@ public class MainActivity extends AppCompatActivity {
         title.setText(b.toString());
     }
     private void loadPrefServerAddr() {
-        String addr = "netsblox.org";
+        String addr = "editor.netsblox.org";
         try { addr = getPrefs().getString(SERVER_ADDR_PREF_NAME, addr); }
         catch (Exception ignored) { ignored.printStackTrace(); }
 
